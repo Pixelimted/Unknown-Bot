@@ -1,85 +1,70 @@
+cat << 'EOF' > /mnt/user-data/outputs/unknown-bot/src/handler.js
 const { EmbedBuilder, PermissionFlagsBits } = require("discord.js");
 const db    = require("./db");
 const utils = require("./utils");
+const fs    = require("fs");
+const path  = require("path");
 
 const WARN_KICK_THRESHOLD = 3;
 const WARN_BAN_THRESHOLD  = 5;
-const MAX_TIMEOUT_MS      = 28 * 24 * 60 * 60 * 1000; // 28 days (Discord limit)
+const MAX_TIMEOUT_MS      = 28 * 24 * 60 * 60 * 1000;
 
-// ─── Guard: check role hierarchy ──────────────────────────────────────────────
-
-function isHigherOrEqual(mod, target, guild) {
-    if (!target.roles) return true; // target is not a member (e.g. banned user)
+function isHigherOrEqual(mod, target) {
+    if (!target.roles) return false;
     return mod.roles.highest.comparePositionTo(target.roles.highest) <= 0;
 }
-
-// ─── DM user about an action taken against them ───────────────────────────────
 
 async function dmUser(user, guild, type, reason, duration) {
     try {
         const embed = new EmbedBuilder()
             .setColor(utils.actionColor(type))
-            .setTitle(`You have been ${utils.actionLabel(type).toLowerCase()}ed from ${guild.name}`)
+            .setTitle(`You have been ${utils.actionLabel(type).toLowerCase()}ed in ${guild.name}`)
             .addFields({ name: "Reason", value: reason || "No reason provided" });
-
-        if (duration) {
-            embed.addFields({ name: "Duration", value: utils.formatDuration(duration) });
-        }
-
+        if (duration) embed.addFields({ name: "Duration", value: utils.formatDuration(duration) });
         await user.send({ embeds: [embed] });
-    } catch {
-        // User has DMs closed — silently skip
-    }
+    } catch {}
 }
-
-// ─── Auto-escalate warn thresholds ────────────────────────────────────────────
 
 async function handleWarnEscalation(interaction, targetMember, warnCount) {
     const guild  = interaction.guild;
-    const reason = `Automatic escalation — reached ${warnCount} warnings`;
+    const reason = `Automatic escalation — reached ${warnCount} warning(s)`;
 
     if (warnCount >= WARN_BAN_THRESHOLD) {
         await dmUser(targetMember.user, guild, "ban", reason);
         await targetMember.ban({ reason, deleteMessageSeconds: 0 });
-
-        const caseId = db.addCase(guild.id, {
-            type:      "ban",
-            targetId:  targetMember.id,
-            targetTag: targetMember.user.tag,
-            modId:     interaction.client.user.id,
-            modTag:    interaction.client.user.tag,
-            reason,
-            automatic: true,
+        const caseId   = db.addCase(guild.id, {
+            type: "ban", targetId: targetMember.id, targetTag: targetMember.user.tag,
+            modId: interaction.client.user.id, modTag: interaction.client.user.tag,
+            reason, automatic: true,
         });
-
-        const caseData = db.getCase(guild.id, caseId);
-        await utils.postToLogs(guild, caseData, targetMember.user, interaction.client.user);
+        await utils.postToLogs(guild, db.getCase(guild.id, caseId), targetMember.user, interaction.client.user);
         return "ban";
     }
 
     if (warnCount >= WARN_KICK_THRESHOLD) {
         await dmUser(targetMember.user, guild, "kick", reason);
         await targetMember.kick(reason);
-
-        const caseId = db.addCase(guild.id, {
-            type:      "kick",
-            targetId:  targetMember.id,
-            targetTag: targetMember.user.tag,
-            modId:     interaction.client.user.id,
-            modTag:    interaction.client.user.tag,
-            reason,
-            automatic: true,
+        const caseId   = db.addCase(guild.id, {
+            type: "kick", targetId: targetMember.id, targetTag: targetMember.user.tag,
+            modId: interaction.client.user.id, modTag: interaction.client.user.tag,
+            reason, automatic: true,
         });
-
-        const caseData = db.getCase(guild.id, caseId);
-        await utils.postToLogs(guild, caseData, targetMember.user, interaction.client.user);
+        await utils.postToLogs(guild, db.getCase(guild.id, caseId), targetMember.user, interaction.client.user);
         return "kick";
     }
 
     return null;
 }
 
-// ─── Handler map ──────────────────────────────────────────────────────────────
+function readAllCases(guildId) {
+    try {
+        const DATA_DIR = fs.existsSync("/data") ? "/data" : path.join(__dirname, "..", "data");
+        const raw = JSON.parse(fs.readFileSync(path.join(DATA_DIR, "cases.json"), "utf8"));
+        return Object.values(raw[guildId]?.entries || {});
+    } catch {
+        return [];
+    }
+}
 
 const handlers = {};
 
@@ -96,42 +81,33 @@ handlers.ban = async (interaction) => {
     const targetMember = await guild.members.fetch(targetUser.id).catch(() => null);
 
     if (targetMember) {
-        if (targetMember.id === interaction.user.id) return utils.errorReply(interaction, "You cannot ban yourself.");
-        if (targetMember.id === guild.ownerId)       return utils.errorReply(interaction, "You cannot ban the server owner.");
-        if (!targetMember.bannable)                  return utils.errorReply(interaction, "I do not have permission to ban this user. They may be higher than me in the role hierarchy.");
-        if (isHigherOrEqual(interaction.member, targetMember, guild)) return utils.errorReply(interaction, "You cannot ban someone with a higher or equal role.");
+        if (targetMember.id === interaction.user.id)  return utils.errorReply(interaction, "You cannot ban yourself.");
+        if (targetMember.id === guild.ownerId)         return utils.errorReply(interaction, "You cannot ban the server owner.");
+        if (!targetMember.bannable)                    return utils.errorReply(interaction, "I do not have permission to ban this user.");
+        if (isHigherOrEqual(interaction.member, targetMember)) return utils.errorReply(interaction, "You cannot ban someone with a higher or equal role.");
     }
 
-    let duration   = null;
-    let expiresAt  = null;
+    let duration  = null;
+    let expiresAt = null;
 
     if (durationStr) {
         duration = utils.parseDuration(durationStr);
-        if (!duration) return utils.errorReply(interaction, "Invalid duration format. Try something like `7d`, `30d`, `2h`.");
+        if (!duration) return utils.errorReply(interaction, "Invalid duration. Try something like `7d`, `30d`, `2h`.");
         expiresAt = new Date(Date.now() + duration);
     }
 
     await interaction.deferReply({ ephemeral: true });
-
     await dmUser(targetUser, guild, "ban", reason, duration);
     await guild.members.ban(targetUser.id, { reason, deleteMessageSeconds: deleteHistory * 86400 });
 
-    const robloxUsername = db.getRobloxUsername(targetUser.id);
-
-    const caseId   = db.addCase(guild.id, {
-        type:      "ban",
-        targetId:  targetUser.id,
-        targetTag: targetUser.tag,
-        modId:     interaction.user.id,
-        modTag:    interaction.user.tag,
-        reason,
-        duration,
-        expiresAt: expiresAt?.getTime() || null,
-        robloxUsername,
+    const caseId = db.addCase(guild.id, {
+        type: "ban", targetId: targetUser.id, targetTag: targetUser.tag,
+        modId: interaction.user.id, modTag: interaction.user.tag,
+        reason, duration, expiresAt: expiresAt?.getTime() || null,
+        robloxUsername: db.getRobloxUsername(targetUser.id),
     });
 
-    const caseData = db.getCase(guild.id, caseId);
-    await utils.postToLogs(guild, caseData, targetUser, interaction.user);
+    await utils.postToLogs(guild, db.getCase(guild.id, caseId), targetUser, interaction.user);
 
     return interaction.editReply({
         embeds: [
@@ -139,9 +115,9 @@ handlers.ban = async (interaction) => {
                 .setColor(utils.COLORS.ban)
                 .setTitle(`Ban — Case #${caseId}`)
                 .addFields(
-                    { name: "User",     value: `${targetUser.tag} (${targetUser.id})`,    inline: true },
-                    { name: "Reason",   value: reason,                                    inline: false },
-                    { name: "Duration", value: utils.formatDuration(duration),            inline: true },
+                    { name: "User",     value: `${targetUser.tag} (${targetUser.id})`, inline: true  },
+                    { name: "Duration", value: utils.formatDuration(duration),         inline: true  },
+                    { name: "Reason",   value: reason,                                 inline: false },
                 )
                 .setTimestamp()
         ],
@@ -168,20 +144,15 @@ handlers.unban = async (interaction) => {
     try {
         await guild.members.unban(userId, reason);
     } catch {
-        return interaction.editReply({ content: "This user is not banned, or I was unable to unban them." });
+        return interaction.editReply({ content: "This user is not banned or I was unable to unban them." });
     }
 
-    const caseId   = db.addCase(guild.id, {
-        type:      "unban",
-        targetId:  userId,
-        targetTag: targetUser.tag,
-        modId:     interaction.user.id,
-        modTag:    interaction.user.tag,
-        reason,
+    const caseId = db.addCase(guild.id, {
+        type: "unban", targetId: userId, targetTag: targetUser.tag,
+        modId: interaction.user.id, modTag: interaction.user.tag, reason,
     });
 
-    const caseData = db.getCase(guild.id, caseId);
-    await utils.postToLogs(guild, caseData, targetUser, interaction.user);
+    await utils.postToLogs(guild, db.getCase(guild.id, caseId), targetUser, interaction.user);
 
     return interaction.editReply({
         embeds: [
@@ -189,7 +160,7 @@ handlers.unban = async (interaction) => {
                 .setColor(utils.COLORS.unban)
                 .setTitle(`Unban — Case #${caseId}`)
                 .addFields(
-                    { name: "User",   value: `${targetUser.tag} (${userId})`, inline: true },
+                    { name: "User",   value: `${targetUser.tag} (${userId})`, inline: true  },
                     { name: "Reason", value: reason,                          inline: false },
                 )
                 .setTimestamp()
@@ -206,30 +177,23 @@ handlers.kick = async (interaction) => {
     const guild        = interaction.guild;
     const targetMember = await guild.members.fetch(targetUser.id).catch(() => null);
 
-    if (!targetMember)              return utils.errorReply(interaction, "That user is not in this server.");
-    if (targetMember.id === interaction.user.id) return utils.errorReply(interaction, "You cannot kick yourself.");
-    if (targetMember.id === guild.ownerId)       return utils.errorReply(interaction, "You cannot kick the server owner.");
-    if (!targetMember.kickable)     return utils.errorReply(interaction, "I do not have permission to kick this user.");
-    if (isHigherOrEqual(interaction.member, targetMember, guild)) return utils.errorReply(interaction, "You cannot kick someone with a higher or equal role.");
+    if (!targetMember)                                   return utils.errorReply(interaction, "That user is not in this server.");
+    if (targetMember.id === interaction.user.id)          return utils.errorReply(interaction, "You cannot kick yourself.");
+    if (targetMember.id === guild.ownerId)                return utils.errorReply(interaction, "You cannot kick the server owner.");
+    if (!targetMember.kickable)                           return utils.errorReply(interaction, "I do not have permission to kick this user.");
+    if (isHigherOrEqual(interaction.member, targetMember)) return utils.errorReply(interaction, "You cannot kick someone with a higher or equal role.");
 
     await interaction.deferReply({ ephemeral: true });
     await dmUser(targetUser, guild, "kick", reason);
     await targetMember.kick(reason);
 
-    const robloxUsername = db.getRobloxUsername(targetUser.id);
-
-    const caseId   = db.addCase(guild.id, {
-        type:      "kick",
-        targetId:  targetUser.id,
-        targetTag: targetUser.tag,
-        modId:     interaction.user.id,
-        modTag:    interaction.user.tag,
-        reason,
-        robloxUsername,
+    const caseId = db.addCase(guild.id, {
+        type: "kick", targetId: targetUser.id, targetTag: targetUser.tag,
+        modId: interaction.user.id, modTag: interaction.user.tag, reason,
+        robloxUsername: db.getRobloxUsername(targetUser.id),
     });
 
-    const caseData = db.getCase(guild.id, caseId);
-    await utils.postToLogs(guild, caseData, targetUser, interaction.user);
+    await utils.postToLogs(guild, db.getCase(guild.id, caseId), targetUser, interaction.user);
 
     return interaction.editReply({
         embeds: [
@@ -237,7 +201,7 @@ handlers.kick = async (interaction) => {
                 .setColor(utils.COLORS.kick)
                 .setTitle(`Kick — Case #${caseId}`)
                 .addFields(
-                    { name: "User",   value: `${targetUser.tag} (${targetUser.id})`, inline: true },
+                    { name: "User",   value: `${targetUser.tag} (${targetUser.id})`, inline: true  },
                     { name: "Reason", value: reason,                                 inline: false },
                 )
                 .setTimestamp()
@@ -255,15 +219,15 @@ handlers.mute = async (interaction) => {
     const guild        = interaction.guild;
     const targetMember = await guild.members.fetch(targetUser.id).catch(() => null);
 
-    if (!targetMember) return utils.errorReply(interaction, "That user is not in this server.");
-    if (targetMember.id === interaction.user.id) return utils.errorReply(interaction, "You cannot mute yourself.");
-    if (targetMember.id === guild.ownerId)       return utils.errorReply(interaction, "You cannot mute the server owner.");
-    if (!targetMember.moderatable)               return utils.errorReply(interaction, "I do not have permission to mute this user.");
-    if (isHigherOrEqual(interaction.member, targetMember, guild)) return utils.errorReply(interaction, "You cannot mute someone with a higher or equal role.");
+    if (!targetMember)                                   return utils.errorReply(interaction, "That user is not in this server.");
+    if (targetMember.id === interaction.user.id)          return utils.errorReply(interaction, "You cannot mute yourself.");
+    if (targetMember.id === guild.ownerId)                return utils.errorReply(interaction, "You cannot mute the server owner.");
+    if (!targetMember.moderatable)                        return utils.errorReply(interaction, "I do not have permission to mute this user.");
+    if (isHigherOrEqual(interaction.member, targetMember)) return utils.errorReply(interaction, "You cannot mute someone with a higher or equal role.");
 
     const duration = utils.parseDuration(durationStr);
-    if (!duration) return utils.errorReply(interaction, "Invalid duration. Try something like `10m`, `1h`, `7d`.");
-    if (duration > MAX_TIMEOUT_MS) return utils.errorReply(interaction, "Duration cannot exceed 28 days (Discord limit).");
+    if (!duration)                  return utils.errorReply(interaction, "Invalid duration. Try something like `10m`, `1h`, `7d`.");
+    if (duration > MAX_TIMEOUT_MS)  return utils.errorReply(interaction, "Duration cannot exceed 28 days.");
 
     await interaction.deferReply({ ephemeral: true });
     await targetMember.timeout(duration, reason);
@@ -273,18 +237,12 @@ handlers.mute = async (interaction) => {
     db.addMute(guild.id, targetUser.id, expiresAt);
 
     const caseId = db.addCase(guild.id, {
-        type:      "mute",
-        targetId:  targetUser.id,
-        targetTag: targetUser.tag,
-        modId:     interaction.user.id,
-        modTag:    interaction.user.tag,
-        reason,
-        duration,
-        expiresAt,
+        type: "mute", targetId: targetUser.id, targetTag: targetUser.tag,
+        modId: interaction.user.id, modTag: interaction.user.tag,
+        reason, duration, expiresAt,
     });
 
-    const caseData = db.getCase(guild.id, caseId);
-    await utils.postToLogs(guild, caseData, targetUser, interaction.user);
+    await utils.postToLogs(guild, db.getCase(guild.id, caseId), targetUser, interaction.user);
 
     return interaction.editReply({
         embeds: [
@@ -292,9 +250,9 @@ handlers.mute = async (interaction) => {
                 .setColor(utils.COLORS.mute)
                 .setTitle(`Mute — Case #${caseId}`)
                 .addFields(
-                    { name: "User",     value: `${targetUser.tag} (${targetUser.id})`, inline: true  },
-                    { name: "Duration", value: utils.formatDuration(duration),         inline: true  },
-                    { name: "Expires",  value: utils.relativeTimestamp(expiresAt),     inline: true  },
+                    { name: "User",     value: `${targetUser.tag} (${targetUser.id})`, inline: true },
+                    { name: "Duration", value: utils.formatDuration(duration),         inline: true },
+                    { name: "Expires",  value: utils.relativeTimestamp(expiresAt),     inline: true },
                     { name: "Reason",   value: reason,                                 inline: false },
                 )
                 .setTimestamp()
@@ -311,7 +269,7 @@ handlers.unmute = async (interaction) => {
     const guild        = interaction.guild;
     const targetMember = await guild.members.fetch(targetUser.id).catch(() => null);
 
-    if (!targetMember) return utils.errorReply(interaction, "That user is not in this server.");
+    if (!targetMember)                         return utils.errorReply(interaction, "That user is not in this server.");
     if (!targetMember.isCommunicationDisabled()) return utils.errorReply(interaction, "That user is not currently muted.");
 
     await interaction.deferReply({ ephemeral: true });
@@ -319,16 +277,11 @@ handlers.unmute = async (interaction) => {
     db.removeMute(guild.id, targetUser.id);
 
     const caseId = db.addCase(guild.id, {
-        type:      "unmute",
-        targetId:  targetUser.id,
-        targetTag: targetUser.tag,
-        modId:     interaction.user.id,
-        modTag:    interaction.user.tag,
-        reason,
+        type: "unmute", targetId: targetUser.id, targetTag: targetUser.tag,
+        modId: interaction.user.id, modTag: interaction.user.tag, reason,
     });
 
-    const caseData = db.getCase(guild.id, caseId);
-    await utils.postToLogs(guild, caseData, targetUser, interaction.user);
+    await utils.postToLogs(guild, db.getCase(guild.id, caseId), targetUser, interaction.user);
 
     return interaction.editReply({
         embeds: [
@@ -336,7 +289,7 @@ handlers.unmute = async (interaction) => {
                 .setColor(utils.COLORS.unmute)
                 .setTitle(`Unmute — Case #${caseId}`)
                 .addFields(
-                    { name: "User",   value: `${targetUser.tag} (${targetUser.id})`, inline: true },
+                    { name: "User",   value: `${targetUser.tag} (${targetUser.id})`, inline: true  },
                     { name: "Reason", value: reason,                                 inline: false },
                 )
                 .setTimestamp()
@@ -354,35 +307,27 @@ handlers.warn = async (interaction) => {
     const targetMember = await guild.members.fetch(targetUser.id).catch(() => null);
 
     if (targetMember) {
-        if (targetMember.id === interaction.user.id) return utils.errorReply(interaction, "You cannot warn yourself.");
-        if (isHigherOrEqual(interaction.member, targetMember, guild)) return utils.errorReply(interaction, "You cannot warn someone with a higher or equal role.");
+        if (targetMember.id === interaction.user.id)           return utils.errorReply(interaction, "You cannot warn yourself.");
+        if (isHigherOrEqual(interaction.member, targetMember)) return utils.errorReply(interaction, "You cannot warn someone with a higher or equal role.");
     }
 
     await interaction.deferReply({ ephemeral: true });
     await dmUser(targetUser, guild, "warn", reason);
 
-    const robloxUsername = db.getRobloxUsername(targetUser.id);
-
     const caseId = db.addCase(guild.id, {
-        type:      "warn",
-        targetId:  targetUser.id,
-        targetTag: targetUser.tag,
-        modId:     interaction.user.id,
-        modTag:    interaction.user.tag,
-        reason,
-        robloxUsername,
+        type: "warn", targetId: targetUser.id, targetTag: targetUser.tag,
+        modId: interaction.user.id, modTag: interaction.user.tag, reason,
+        robloxUsername: db.getRobloxUsername(targetUser.id),
     });
 
-    const caseData  = db.getCase(guild.id, caseId);
     const warnCount = db.getUserWarnCount(guild.id, targetUser.id);
-
-    await utils.postToLogs(guild, caseData, targetUser, interaction.user);
+    await utils.postToLogs(guild, db.getCase(guild.id, caseId), targetUser, interaction.user);
 
     let escalationNote = "";
     if (targetMember) {
         const escalated = await handleWarnEscalation(interaction, targetMember, warnCount);
-        if (escalated === "ban")  escalationNote = `\nUser has been automatically **banned** after reaching ${WARN_BAN_THRESHOLD} warnings.`;
-        if (escalated === "kick") escalationNote = `\nUser has been automatically **kicked** after reaching ${WARN_KICK_THRESHOLD} warnings.`;
+        if (escalated === "ban")  escalationNote = `\nUser automatically **banned** after reaching ${WARN_BAN_THRESHOLD} warnings.`;
+        if (escalated === "kick") escalationNote = `\nUser automatically **kicked** after reaching ${WARN_KICK_THRESHOLD} warnings.`;
     }
 
     return interaction.editReply({
@@ -391,9 +336,9 @@ handlers.warn = async (interaction) => {
                 .setColor(utils.COLORS.warn)
                 .setTitle(`Warning — Case #${caseId}`)
                 .addFields(
-                    { name: "User",          value: `${targetUser.tag} (${targetUser.id})`, inline: true  },
-                    { name: "Total Warnings", value: `${warnCount}`,                        inline: true  },
-                    { name: "Reason",         value: reason + escalationNote,               inline: false },
+                    { name: "User",           value: `${targetUser.tag} (${targetUser.id})`, inline: true  },
+                    { name: "Total Warnings", value: `${warnCount}`,                         inline: true  },
+                    { name: "Reason",         value: reason + escalationNote,                inline: false },
                 )
                 .setTimestamp()
         ],
@@ -404,18 +349,17 @@ handlers.warn = async (interaction) => {
 handlers.unwarn = async (interaction) => {
     if (!await utils.hasModPermission(interaction)) return utils.noPermissionReply(interaction);
 
-    const caseId = interaction.options.getInteger("caseid");
-    const reason = interaction.options.getString("reason") || "No reason provided";
-    const guild  = interaction.guild;
-
+    const caseId   = interaction.options.getInteger("caseid");
+    const reason   = interaction.options.getString("reason") || "No reason provided";
+    const guild    = interaction.guild;
     const caseData = db.getCase(guild.id, caseId);
-    if (!caseData)            return utils.errorReply(interaction, `Case #${caseId} not found.`);
+
+    if (!caseData)                return utils.errorReply(interaction, `Case #${caseId} not found.`);
     if (caseData.type !== "warn") return utils.errorReply(interaction, `Case #${caseId} is not a warning.`);
-    if (caseData.removed)     return utils.errorReply(interaction, `Case #${caseId} has already been removed.`);
+    if (caseData.removed)         return utils.errorReply(interaction, `Case #${caseId} has already been removed.`);
 
     db.updateCase(guild.id, caseId, { removed: true, removedBy: interaction.user.id, removedReason: reason });
-
-    return utils.successReply(interaction, `Warning #${caseId} has been removed.\nReason: ${reason}`);
+    return utils.successReply(interaction, `Warning #${caseId} removed.\nReason: ${reason}`);
 };
 
 // ── Note ──────────────────────────────────────────────────────────────────────
@@ -427,17 +371,11 @@ handlers.note = async (interaction) => {
     const guild      = interaction.guild;
 
     const caseId = db.addCase(guild.id, {
-        type:      "note",
-        targetId:  targetUser.id,
-        targetTag: targetUser.tag,
-        modId:     interaction.user.id,
-        modTag:    interaction.user.tag,
-        reason:    note,
+        type: "note", targetId: targetUser.id, targetTag: targetUser.tag,
+        modId: interaction.user.id, modTag: interaction.user.tag, reason: note,
     });
 
-    const caseData = db.getCase(guild.id, caseId);
-    await utils.postToLogs(guild, caseData, targetUser, interaction.user);
-
+    await utils.postToLogs(guild, db.getCase(guild.id, caseId), targetUser, interaction.user);
     return utils.successReply(interaction, `Note added to ${targetUser.tag} — Case #${caseId}`);
 };
 
@@ -456,7 +394,7 @@ handlers.cases = async (interaction) => {
         return utils.successReply(interaction, `No ${filter === "all" ? "" : filter + " "}cases found for **${targetUser.tag}**.`);
     }
 
-    const robloxUsername = db.getRobloxUsername(targetUser.id);
+    const roblox = db.getRobloxUsername(targetUser.id);
     const sorted = cases.sort((a, b) => b.createdAt - a.createdAt);
 
     const fields = sorted.slice(0, 10).map(c => ({
@@ -470,9 +408,9 @@ handlers.cases = async (interaction) => {
         .setTitle(`Cases for ${targetUser.tag}`)
         .setThumbnail(targetUser.displayAvatarURL({ size: 64 }))
         .addFields(
-            { name: "Total Cases",   value: `${cases.length}`,                                                             inline: true },
-            { name: "Warnings",      value: `${cases.filter(c => c.type === "warn").length}`,                              inline: true },
-            { name: "Roblox",        value: robloxUsername || "Not linked",                                                inline: true },
+            { name: "Total Cases", value: `${cases.length}`,                                     inline: true },
+            { name: "Warnings",    value: `${cases.filter(c => c.type === "warn").length}`,       inline: true },
+            { name: "Roblox",      value: roblox || "Not linked",                                 inline: true },
         )
         .addFields(fields)
         .setFooter({ text: cases.length > 10 ? `Showing 10 of ${cases.length} cases` : `${cases.length} case(s) total` })
@@ -485,22 +423,24 @@ handlers.cases = async (interaction) => {
 handlers.case = async (interaction) => {
     if (!await utils.hasModPermission(interaction)) return utils.noPermissionReply(interaction);
 
-    const id    = interaction.options.getInteger("id");
-    const guild = interaction.guild;
-
+    const id       = interaction.options.getInteger("id");
+    const guild    = interaction.guild;
     const caseData = db.getCase(guild.id, id);
+
     if (!caseData) return utils.errorReply(interaction, `Case #${id} not found.`);
 
     let targetUser;
     try { targetUser = await interaction.client.users.fetch(caseData.targetId); }
-    catch { targetUser = { tag: caseData.targetTag || "Unknown User", id: caseData.targetId, displayAvatarURL: () => null }; }
+    catch { targetUser = { tag: caseData.targetTag || "Unknown", id: caseData.targetId, displayAvatarURL: () => null }; }
 
     let modUser;
     try { modUser = await interaction.client.users.fetch(caseData.modId); }
-    catch { modUser = { tag: caseData.modTag || "Unknown Mod", id: caseData.modId }; }
+    catch { modUser = { tag: caseData.modTag || "Unknown", id: caseData.modId }; }
 
     const embed = utils.buildCaseEmbed(caseData, targetUser, modUser);
-    if (caseData.removed) embed.addFields({ name: "Status", value: `Removed by <@${caseData.removedBy}> — ${caseData.removedReason}`, inline: false });
+    if (caseData.removed) {
+        embed.addFields({ name: "Status", value: `Removed by <@${caseData.removedBy}> — ${caseData.removedReason}`, inline: false });
+    }
 
     return interaction.reply({ embeds: [embed], ephemeral: true });
 };
@@ -509,24 +449,9 @@ handlers.case = async (interaction) => {
 handlers.viewlog = async (interaction) => {
     if (!await utils.hasModPermission(interaction)) return utils.noPermissionReply(interaction);
 
-    const limit = interaction.options.getInteger("limit") || 10;
-    const guild = interaction.guild;
-
-    const allCases = db.getUserCases(guild.id, null);
-
-    // getUserCases with null returns nothing useful, so grab all directly
-    const { getCase: _getCase, ...rest } = db;
-    const rawCases = Object.values(
-        (() => {
-            try {
-                const fs   = require("fs");
-                const path = require("path");
-                const DATA_DIR = fs.existsSync("/data") ? "/data" : path.join(__dirname, "..", "data");
-                const raw = JSON.parse(fs.readFileSync(path.join(DATA_DIR, "cases.json"), "utf8"));
-                return raw[guild.id]?.entries || {};
-            } catch { return {}; }
-        })()
-    );
+    const limit    = interaction.options.getInteger("limit") || 10;
+    const guild    = interaction.guild;
+    const rawCases = readAllCases(guild.id);
 
     if (!rawCases.length) return utils.successReply(interaction, "No moderation cases found for this server.");
 
@@ -552,11 +477,11 @@ handlers.viewlog = async (interaction) => {
 handlers.reason = async (interaction) => {
     if (!await utils.hasModPermission(interaction)) return utils.noPermissionReply(interaction);
 
-    const caseId = interaction.options.getInteger("caseid");
-    const reason = interaction.options.getString("reason");
-    const guild  = interaction.guild;
-
+    const caseId   = interaction.options.getInteger("caseid");
+    const reason   = interaction.options.getString("reason");
+    const guild    = interaction.guild;
     const caseData = db.getCase(guild.id, caseId);
+
     if (!caseData) return utils.errorReply(interaction, `Case #${caseId} not found.`);
 
     if (caseData.modId !== interaction.user.id && !interaction.member.permissions.has(PermissionFlagsBits.Administrator)) {
@@ -605,18 +530,15 @@ handlers.purge = async (interaction) => {
     await interaction.deferReply({ ephemeral: true });
 
     let messages = await channel.messages.fetch({ limit: 100 });
-
     if (filterUser) messages = messages.filter(m => m.author.id === filterUser.id);
 
-    const toDelete = [...messages.values()].slice(0, amount);
     const twoWeeksAgo = Date.now() - 14 * 24 * 60 * 60 * 1000;
-    const eligible = toDelete.filter(m => m.createdTimestamp > twoWeeksAgo);
+    const toDelete    = [...messages.values()].slice(0, amount).filter(m => m.createdTimestamp > twoWeeksAgo);
 
-    if (!eligible.length) return interaction.editReply({ content: "No messages to delete (messages older than 14 days cannot be bulk deleted)." });
+    if (!toDelete.length) return interaction.editReply({ content: "No eligible messages to delete. Messages older than 14 days cannot be bulk deleted." });
 
-    await channel.bulkDelete(eligible, true);
-
-    return interaction.editReply({ content: `Deleted ${eligible.length} message(s)${filterUser ? ` from ${filterUser.tag}` : ""}.` });
+    await channel.bulkDelete(toDelete, true);
+    return interaction.editReply({ content: `Deleted ${toDelete.length} message(s)${filterUser ? ` from ${filterUser.tag}` : ""}.` });
 };
 
 // ── Slowmode ──────────────────────────────────────────────────────────────────
@@ -627,15 +549,18 @@ handlers.slowmode = async (interaction) => {
     const channel = interaction.options.getChannel("channel") || interaction.channel;
 
     await channel.setRateLimitPerUser(seconds);
-    return utils.successReply(interaction, seconds === 0 ? `Slowmode disabled in <#${channel.id}>.` : `Slowmode set to ${seconds}s in <#${channel.id}>.`);
+    return utils.successReply(interaction, seconds === 0
+        ? `Slowmode disabled in <#${channel.id}>.`
+        : `Slowmode set to ${seconds}s in <#${channel.id}>.`
+    );
 };
 
 // ── Lock ──────────────────────────────────────────────────────────────────────
 handlers.lock = async (interaction) => {
     if (!await utils.hasModPermission(interaction)) return utils.noPermissionReply(interaction);
 
-    const channel = interaction.options.getChannel("channel") || interaction.channel;
-    const reason  = interaction.options.getString("reason") || "No reason provided";
+    const channel     = interaction.options.getChannel("channel") || interaction.channel;
+    const reason      = interaction.options.getString("reason") || "No reason provided";
     const everyoneRole = interaction.guild.roles.everyone;
 
     await channel.permissionOverwrites.edit(everyoneRole, { SendMessages: false }, { reason });
@@ -646,7 +571,7 @@ handlers.lock = async (interaction) => {
 handlers.unlock = async (interaction) => {
     if (!await utils.hasModPermission(interaction)) return utils.noPermissionReply(interaction);
 
-    const channel = interaction.options.getChannel("channel") || interaction.channel;
+    const channel     = interaction.options.getChannel("channel") || interaction.channel;
     const everyoneRole = interaction.guild.roles.everyone;
 
     await channel.permissionOverwrites.edit(everyoneRole, { SendMessages: null });
@@ -676,13 +601,13 @@ handlers.userinfo = async (interaction) => {
         .setTitle(targetUser.tag)
         .setThumbnail(targetUser.displayAvatarURL({ size: 128 }))
         .addFields(
-            { name: "ID",            value: targetUser.id,                                                                        inline: true  },
-            { name: "Account Created", value: utils.timestamp(targetUser.createdAt),                                              inline: true  },
-            { name: "Joined Server", value: targetMember ? utils.timestamp(targetMember.joinedAt) : "Not in server",              inline: true  },
-            { name: "Roblox",        value: roblox || "Not linked",                                                               inline: true  },
-            { name: "Warnings",      value: `${warns}`,                                                                           inline: true  },
-            { name: "Total Cases",   value: `${cases.length}`,                                                                    inline: true  },
-            { name: "Roles",         value: roles,                                                                                 inline: false },
+            { name: "ID",             value: targetUser.id,                                                            inline: true  },
+            { name: "Account Created", value: utils.timestamp(targetUser.createdAt),                                   inline: true  },
+            { name: "Joined Server",  value: targetMember ? utils.timestamp(targetMember.joinedAt) : "Not in server", inline: true  },
+            { name: "Roblox",         value: roblox || "Not linked",                                                   inline: true  },
+            { name: "Warnings",       value: `${warns}`,                                                               inline: true  },
+            { name: "Total Cases",    value: `${cases.length}`,                                                        inline: true  },
+            { name: "Roles",          value: roles,                                                                    inline: false },
         )
         .setTimestamp();
 
@@ -722,11 +647,11 @@ handlers.setup = async (interaction) => {
             .setColor(utils.COLORS.info)
             .setTitle("Bot Configuration")
             .addFields(
-                { name: "Mod Role",          value: settings.modRoleId          ? `<@&${settings.modRoleId}>`          : "Not set", inline: true },
-                { name: "Summary Log",       value: settings.summaryLogChannelId ? `<#${settings.summaryLogChannelId}>` : "Not set", inline: true },
-                { name: "Detailed Log",      value: settings.detailedLogChannelId ? `<#${settings.detailedLogChannelId}>` : "Not set", inline: true },
-                { name: "Auto-Kick at",      value: `${WARN_KICK_THRESHOLD} warnings`, inline: true },
-                { name: "Auto-Ban at",       value: `${WARN_BAN_THRESHOLD} warnings`,  inline: true },
+                { name: "Mod Role",     value: settings.modRoleId           ? `<@&${settings.modRoleId}>`            : "Not set", inline: true },
+                { name: "Summary Log",  value: settings.summaryLogChannelId  ? `<#${settings.summaryLogChannelId}>`  : "Not set", inline: true },
+                { name: "Detailed Log", value: settings.detailedLogChannelId ? `<#${settings.detailedLogChannelId}>` : "Not set", inline: true },
+                { name: "Auto-Kick at", value: `${WARN_KICK_THRESHOLD} warnings`, inline: true },
+                { name: "Auto-Ban at",  value: `${WARN_BAN_THRESHOLD} warnings`,  inline: true },
             )
             .setTimestamp();
         return interaction.reply({ embeds: [embed], ephemeral: true });
@@ -734,3 +659,5 @@ handlers.setup = async (interaction) => {
 };
 
 module.exports = handlers;
+EOF
+echo "done"
