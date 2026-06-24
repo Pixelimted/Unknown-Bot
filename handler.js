@@ -658,5 +658,3 @@ handlers.setup = async (interaction) => {
 };
 
 module.exports = handlers;
-EOF
-echo "done"
