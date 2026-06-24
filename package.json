@@ -1,0 +1,12 @@
+{
+  "name": "unknown-moderation-bot",
+  "version": "1.0.0",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js"
+  },
+  "dependencies": {
+    "discord.js": "^14.15.3",
+    "ms": "^2.1.3"
+  }
+}
