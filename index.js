@@ -1,4 +1,5 @@
-const { Client, GatewayIntentBits, REST, Routes } = require("discord.js");
+cat << 'EOF' > /mnt/user-data/outputs/unknown-bot/src/index.js
+const { Client, GatewayIntentBits, REST, Routes, EmbedBuilder } = require("discord.js");
 
 const commands = require("./commands");
 const handlers = require("./handler");
@@ -12,18 +13,12 @@ if (!TOKEN || !CLIENT_ID) {
     process.exit(1);
 }
 
-// ─── Client ───────────────────────────────────────────────────────────────────
-
 const client = new Client({
     intents: [
         GatewayIntentBits.Guilds,
-        GatewayIntentBits.GuildMembers,
         GatewayIntentBits.GuildModeration,
-        GatewayIntentBits.GuildMessages,
     ],
 });
-
-// ─── Register slash commands ──────────────────────────────────────────────────
 
 const rest = new REST({ version: "10" }).setToken(TOKEN);
 
@@ -36,13 +31,10 @@ const rest = new REST({ version: "10" }).setToken(TOKEN);
     }
 })();
 
-// ─── Ready ────────────────────────────────────────────────────────────────────
-
 client.once("clientReady", (c) => {
     console.log(`[Bot] Logged in as ${c.user.tag}`);
     console.log(`[Bot] Serving ${c.guilds.cache.size} server(s).`);
 
-    // Check for expired mutes every 60 seconds
     setInterval(async () => {
         const expired = db.getExpiredMutes();
         for (const { guildId, userId } of expired) {
@@ -61,8 +53,6 @@ client.once("clientReady", (c) => {
     }, 60_000);
 });
 
-// ─── Interaction handler ──────────────────────────────────────────────────────
-
 client.on("interactionCreate", async (interaction) => {
     if (!interaction.isChatInputCommand()) return;
     if (!interaction.guild) {
@@ -75,7 +65,7 @@ client.on("interactionCreate", async (interaction) => {
     try {
         await handler(interaction);
     } catch (err) {
-        console.error(`[Error] Command /${interaction.commandName} failed:`, err);
+        console.error(`[Error] /${interaction.commandName} failed:`, err);
 
         const payload = {
             content: "Something went wrong while running that command. Please try again.",
@@ -90,10 +80,8 @@ client.on("interactionCreate", async (interaction) => {
     }
 });
 
-// ─── Member leave — log departure ─────────────────────────────────────────────
-
 client.on("guildMemberRemove", async (member) => {
-    const settings = db.getGuildSettings(member.guild.id);
+    const settings  = db.getGuildSettings(member.guild.id);
     const channelId = settings.summaryLogChannelId;
     if (!channelId) return;
 
@@ -101,7 +89,6 @@ client.on("guildMemberRemove", async (member) => {
         const channel = await member.guild.channels.fetch(channelId);
         if (!channel?.isTextBased()) return;
 
-        const { EmbedBuilder } = require("discord.js");
         const cases  = db.getUserCases(member.guild.id, member.id);
         const roblox = db.getRobloxUsername(member.id);
 
@@ -111,9 +98,9 @@ client.on("guildMemberRemove", async (member) => {
                     .setColor(0x95A5A6)
                     .setTitle("Member Left")
                     .addFields(
-                        { name: "User",        value: `${member.user.tag} (${member.id})`,  inline: true },
-                        { name: "Roblox",      value: roblox || "Not linked",               inline: true },
-                        { name: "Cases on record", value: `${cases.length}`,                inline: true },
+                        { name: "User",            value: `${member.user.tag} (${member.id})`, inline: true },
+                        { name: "Roblox",          value: roblox || "Not linked",              inline: true },
+                        { name: "Cases on record", value: `${cases.length}`,                   inline: true },
                     )
                     .setThumbnail(member.user.displayAvatarURL({ size: 64 }))
                     .setTimestamp()
@@ -122,9 +109,9 @@ client.on("guildMemberRemove", async (member) => {
     } catch {}
 });
 
-// ─── Login ────────────────────────────────────────────────────────────────────
-
 client.login(TOKEN).catch(err => {
     console.error("[FATAL] Login failed:", err.message);
     process.exit(1);
 });
+EOF
+echo "done"
