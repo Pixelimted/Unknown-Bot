@@ -1,4 +1,3 @@
-cat << 'EOF' > /mnt/user-data/outputs/unknown-bot/src/index.js
 const { Client, GatewayIntentBits, REST, Routes, EmbedBuilder } = require("discord.js");
 
 const commands = require("./commands");
