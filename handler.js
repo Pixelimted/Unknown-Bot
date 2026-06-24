@@ -1,4 +1,3 @@
-cat << 'EOF' > /mnt/user-data/outputs/unknown-bot/src/handler.js
 const { EmbedBuilder, PermissionFlagsBits } = require("discord.js");
 const db    = require("./db");
 const utils = require("./utils");
