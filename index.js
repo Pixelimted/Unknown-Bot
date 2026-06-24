@@ -112,5 +112,3 @@ client.login(TOKEN).catch(err => {
     console.error("[FATAL] Login failed:", err.message);
     process.exit(1);
 });
-EOF
-echo "done"
