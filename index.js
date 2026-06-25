@@ -5,6 +5,7 @@ const {
     Routes,
     EmbedBuilder,
     SlashCommandBuilder,
+    Events, // Added Events for correct Discord handling
 } = require("discord.js");
 
 const express  = require("express");
@@ -16,7 +17,7 @@ const ingame   = require("./ingame");
 const TOKEN         = process.env.BOT_TOKEN;
 const CLIENT_ID     = process.env.CLIENT_ID;
 const ROBLOX_SECRET = process.env.ROBLOX_SECRET;
-const PORT          = process.env.PORT || 3000;
+const PORT          = process.env.PORT || 3000; // Railway automatically injects this variable
 
 if (!TOKEN || !CLIENT_ID) {
     console.error("[FATAL] BOT_TOKEN or CLIENT_ID is missing.");
@@ -62,7 +63,8 @@ const rest = new REST({ version: "10" }).setToken(TOKEN);
 
 // ── Ready ──────────────────────────────────────────────────────────────────────
 
-client.once("clientReady", function(c) {
+// FIXED: "clientReady" is incorrect in discord.js v14. Changed to Events.ClientReady.
+client.once(Events.ClientReady, function(c) {
     console.log("[Bot] Logged in as " + c.user.tag);
     console.log("[Bot] Serving " + c.guilds.cache.size + " server(s).");
 
@@ -173,8 +175,9 @@ app.get("/", function(req, res) {
     res.send("Unknown Moderation Bot running.");
 });
 
-app.listen(PORT, function() {
-    console.log("[Server] Express on port " + PORT);
+// FIXED: Explicitly bind to '0.0.0.0' so Railway's proxy system can reach the application
+app.listen(PORT, "0.0.0.0", function() {
+    console.log("[Server] Express server actively listening on port " + PORT);
 });
 
 // ── Login ──────────────────────────────────────────────────────────────────────
