@@ -658,3 +658,27 @@ handlers.setup = async (interaction) => {
 };
 
 module.exports = handlers;
+
+// ── Ingame ────────────────────────────────────────────────────────────────────
+handlers.ingame = async (interaction) => {
+    if (!await utils.hasModPermission(interaction)) return utils.noPermissionReply(interaction);
+
+    const command = interaction.options.getString("command");
+    const { queueCommand } = require("./ingame");
+
+    await interaction.deferReply();
+
+    const { success, result } = await queueCommand(command, interaction.channelId, interaction.user.id);
+
+    const embed = new EmbedBuilder()
+        .setColor(success ? utils.COLORS.success : utils.COLORS.error)
+        .setTitle(success ? "Command Executed" : "Command Failed")
+        .addFields(
+            { name: "Command",    value: `\`${command}\``,               inline: false },
+            { name: "Result",     value: result || "No output returned", inline: false },
+            { name: "Ran by",     value: interaction.user.tag,           inline: true  },
+        )
+        .setTimestamp();
+
+    return interaction.editReply({ embeds: [embed] });
+};
