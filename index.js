@@ -1,20 +1,29 @@
-const { Client, GatewayIntentBits, REST, Routes, EmbedBuilder, SlashCommandBuilder } = require("discord.js");
+const {
+    Client,
+    GatewayIntentBits,
+    REST,
+    Routes,
+    EmbedBuilder,
+    SlashCommandBuilder,
+} = require("discord.js");
 
-const commands  = require("./commands");
-const handlers  = require("./handler");
-const db        = require("./db");
-const ingame    = require("./ingame");
+const express  = require("express");
+const commands = require("./commands");
+const handlers = require("./handler");
+const db       = require("./db");
+const ingame   = require("./ingame");
 
-const TOKEN     = process.env.BOT_TOKEN;
-const CLIENT_ID = process.env.CLIENT_ID;
-const ROBLOX_SECRET = process.env.ROBLOX_SECRET; // shared secret so only your game can POST
+const TOKEN         = process.env.BOT_TOKEN;
+const CLIENT_ID     = process.env.CLIENT_ID;
+const ROBLOX_SECRET = process.env.ROBLOX_SECRET;
+const PORT          = process.env.PORT || 3000;
 
 if (!TOKEN || !CLIENT_ID) {
     console.error("[FATAL] BOT_TOKEN or CLIENT_ID is missing.");
     process.exit(1);
 }
 
-// ─── Discord Client ────────────────────────────────────────────────────────────
+// ── Discord client ─────────────────────────────────────────────────────────────
 
 const client = new Client({
     intents: [
@@ -23,93 +32,96 @@ const client = new Client({
     ],
 });
 
-// ─── Register Commands ─────────────────────────────────────────────────────────
+// ── Slash command definitions ──────────────────────────────────────────────────
 
 const ingameCommand = new SlashCommandBuilder()
     .setName("ingame")
-    .setDescription("Run a Cmdr command in-game. Use quotes for arguments with spaces.")
-    .addStringOption(o =>
-        o.setName("command")
-            .setDescription('Full command as you'd type in Cmdr. e.g: ban Zenokei exploiting | announce "Hello!" | live Summer true')
-            .setRequired(true)
-    )
+    .setDescription("Run a Cmdr command in the Roblox game")
+    .addStringOption(function(o) {
+        return o
+            .setName("command")
+            .setDescription("Full Cmdr command e.g: ban Zenokei exploiting | announce Hello | extinction")
+            .setRequired(true);
+    })
     .toJSON();
+
+const allCommands = commands.concat([ingameCommand]);
+
+// ── Register commands ──────────────────────────────────────────────────────────
 
 const rest = new REST({ version: "10" }).setToken(TOKEN);
 
-(async () => {
+(async function() {
     try {
-        await rest.put(Routes.applicationCommands(CLIENT_ID), {
-            body: [...commands, ingameCommand],
-        });
+        await rest.put(Routes.applicationCommands(CLIENT_ID), { body: allCommands });
         console.log("[Bot] Slash commands registered.");
     } catch (err) {
         console.error("[Bot] Failed to register commands:", err);
     }
-})();
+}());
 
-// ─── Ready ────────────────────────────────────────────────────────────────────
+// ── Ready ──────────────────────────────────────────────────────────────────────
 
-client.once("clientReady", (c) => {
-    console.log(`[Bot] Logged in as ${c.user.tag}`);
-    console.log(`[Bot] Serving ${c.guilds.cache.size} server(s).`);
+client.once("clientReady", function(c) {
+    console.log("[Bot] Logged in as " + c.user.tag);
+    console.log("[Bot] Serving " + c.guilds.cache.size + " server(s).");
 
-    // Auto-unmute checker — every 60 seconds
-    setInterval(async () => {
-        const expired = db.getExpiredMutes();
-        for (const { guildId, userId } of expired) {
+    setInterval(async function() {
+        var expired = db.getExpiredMutes();
+        for (var i = 0; i < expired.length; i++) {
+            var item = expired[i];
             try {
-                const guild  = await client.guilds.fetch(guildId);
-                const member = await guild.members.fetch(userId).catch(() => null);
-                if (member?.isCommunicationDisabled()) {
+                var guild  = await client.guilds.fetch(item.guildId);
+                var member = await guild.members.fetch(item.userId).catch(function() { return null; });
+                if (member && member.isCommunicationDisabled()) {
                     await member.timeout(null, "Mute duration expired");
                 }
-                db.removeMute(guildId, userId);
-                console.log(`[Mute] Auto-unmuted ${userId} in ${guildId}`);
+                db.removeMute(item.guildId, item.userId);
+                console.log("[Mute] Auto-unmuted " + item.userId + " in " + item.guildId);
             } catch (err) {
-                console.error(`[Mute] Failed to auto-unmute ${userId}:`, err.message);
+                console.error("[Mute] Failed to auto-unmute " + item.userId + ": " + err.message);
             }
         }
-    }, 60_000);
+    }, 60000);
 });
 
-// ─── Interactions ──────────────────────────────────────────────────────────────
+// ── Interactions ───────────────────────────────────────────────────────────────
 
-client.on("interactionCreate", async (interaction) => {
+client.on("interactionCreate", async function(interaction) {
     if (!interaction.isChatInputCommand()) return;
     if (!interaction.guild) {
         return interaction.reply({ content: "Commands must be used inside a server.", ephemeral: true });
     }
 
-    const handler = handlers[interaction.commandName];
+    var handler = handlers[interaction.commandName];
     if (!handler) return;
 
     try {
         await handler(interaction);
     } catch (err) {
-        console.error(`[Error] /${interaction.commandName} failed:`, err);
-        const payload = { content: "Something went wrong. Please try again.", ephemeral: true };
+        console.error("[Error] /" + interaction.commandName + " failed:", err);
+        var payload = { content: "Something went wrong. Please try again.", ephemeral: true };
         if (interaction.deferred || interaction.replied) {
-            await interaction.editReply(payload).catch(() => {});
+            await interaction.editReply(payload).catch(function() {});
         } else {
-            await interaction.reply(payload).catch(() => {});
+            await interaction.reply(payload).catch(function() {});
         }
     }
 });
 
-// ─── Member leave log ──────────────────────────────────────────────────────────
+// ── Member leave log ───────────────────────────────────────────────────────────
 
-client.on("guildMemberRemove", async (member) => {
-    const settings  = db.getGuildSettings(member.guild.id);
-    const channelId = settings.summaryLogChannelId;
+client.on("guildMemberRemove", async function(member) {
+    var settings  = db.getGuildSettings(member.guild.id);
+    var channelId = settings.summaryLogChannelId;
     if (!channelId) return;
 
     try {
-        const channel = await member.guild.channels.fetch(channelId);
-        if (!channel?.isTextBased()) return;
+        var channel = await member.guild.channels.fetch(channelId);
+        if (!channel || !channel.isTextBased()) return;
 
-        const cases  = db.getUserCases(member.guild.id, member.id);
-        const roblox = db.getRobloxUsername(member.id);
+        var cases  = db.getUserCases(member.guild.id, member.id);
+        var roblox = db.getRobloxUsername(member.id);
 
         await channel.send({
             embeds: [
@@ -117,56 +129,58 @@ client.on("guildMemberRemove", async (member) => {
                     .setColor(0x95A5A6)
                     .setTitle("Member Left")
                     .addFields(
-                        { name: "User",            value: `${member.user.tag} (${member.id})`, inline: true },
-                        { name: "Roblox",          value: roblox || "Not linked",              inline: true },
-                        { name: "Cases on record", value: `${cases.length}`,                   inline: true },
+                        { name: "User",            value: member.user.tag + " (" + member.id + ")", inline: true },
+                        { name: "Roblox",          value: roblox || "Not linked",                   inline: true },
+                        { name: "Cases on record", value: String(cases.length),                      inline: true },
                     )
                     .setThumbnail(member.user.displayAvatarURL({ size: 64 }))
                     .setTimestamp()
             ],
         });
-    } catch {}
+    } catch (err) {}
 });
 
-// ─── Express (Roblox HTTP bridge) ─────────────────────────────────────────────
+// ── Express server ─────────────────────────────────────────────────────────────
 
-const express = require("express");
-const app     = express();
+var app = express();
 app.use(express.json());
 
-// Middleware — validate the shared secret on all /roblox routes
-app.use("/roblox", (req, res, next) => {
+app.use("/roblox", function(req, res, next) {
     if (ROBLOX_SECRET && req.headers["x-roblox-secret"] !== ROBLOX_SECRET) {
         return res.status(401).json({ error: "Unauthorized" });
     }
     next();
 });
 
-// Roblox polls this every 2 seconds to get pending commands
-app.get("/roblox/pending", (req, res) => {
-    res.json({ commands: ingame.getPendingCommands() });
+app.get("/roblox/pending", function(req, res) {
+    res.json({ commands: ingame.getPending() });
 });
 
-// Roblox POSTs the result back here after running a command
-app.post("/roblox/result", (req, res) => {
-    const { id, result, success } = req.body;
+app.post("/roblox/result", function(req, res) {
+    var id      = req.body.id;
+    var result  = req.body.result;
+    var success = req.body.success;
+
     if (!id) return res.status(400).json({ error: "Missing id" });
 
-    const resolved = ingame.resolve(id, result ?? "No output", success ?? true);
+    var resolved = ingame.resolve(id, result || "No output", success);
     if (!resolved) return res.status(404).json({ error: "Command ID not found or already resolved" });
 
     res.json({ ok: true });
 });
 
-app.get("/", (_req, res) => res.send("Unknown Moderation Bot running."));
+app.get("/", function(req, res) {
+    res.send("Unknown Moderation Bot running.");
+});
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`[Server] Express on port ${PORT}`));
+app.listen(PORT, function() {
+    console.log("[Server] Express on port " + PORT);
+});
 
-// ─── Login ─────────────────────────────────────────────────────────────────────
+// ── Login ──────────────────────────────────────────────────────────────────────
 
-client.login(TOKEN).catch(err => {
-    console.error("[FATAL] Login failed:", err.message);
+client.login(TOKEN).catch(function(err) {
+    console.error("[FATAL] Login failed: " + err.message);
     process.exit(1);
 });
 
