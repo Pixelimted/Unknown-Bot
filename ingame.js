@@ -1,35 +1,46 @@
-const pendingCommands = new Map(); // commandId -> { resolve, channelId, userId, command }
+// ─── In-memory command queue ───────────────────────────────────────────────────
+// Each entry lives here until Roblox picks it up and reports back,
+// or until the 30-second timeout fires.
 
-let commandCounter = 0;
+const pending = new Map();
+let counter   = 0;
 
-function queueCommand(command, channelId, userId) {
-    const id = `cmd_${++commandCounter}_${Date.now()}`;
+function enqueue(command, channelId, userId) {
+    const id = `cmd_${Date.now()}_${++counter}`;
+
     return new Promise((resolve) => {
-        pendingCommands.set(id, { resolve, channelId, userId, command, queuedAt: Date.now() });
-        // Auto-expire after 30 seconds if Roblox never picks it up
-        setTimeout(() => {
-            if (pendingCommands.has(id)) {
-                pendingCommands.get(id).resolve({ success: false, result: "Command timed out — no Roblox server picked it up within 30 seconds." });
-                pendingCommands.delete(id);
-            }
+        const timeout = setTimeout(() => {
+            if (!pending.has(id)) return;
+            pending.delete(id);
+            resolve({
+                success: false,
+                result:  "No Roblox server picked up the command within 30 seconds. Make sure the DiscordCmdrBridge script is running in a live server.",
+            });
         }, 30_000);
+
+        pending.set(id, { resolve, timeout, command, channelId, userId, queuedAt: Date.now() });
     });
 }
 
-function getPendingCommands() {
-    const out = [];
-    for (const [id, data] of pendingCommands.entries()) {
-        out.push({ id, command: data.command });
-    }
-    return out;
+function getPending() {
+    return [...pending.entries()].map(([id, data]) => ({
+        id,
+        command: data.command,
+    }));
 }
 
-function resolveCommand(id, result, success) {
-    const entry = pendingCommands.get(id);
+function resolve(id, result, success) {
+    const entry = pending.get(id);
     if (!entry) return false;
+
+    clearTimeout(entry.timeout);
     entry.resolve({ success, result });
-    pendingCommands.delete(id);
+    pending.delete(id);
     return true;
 }
 
-module.exports = { queueCommand, getPendingCommands, resolveCommand };
+function pendingCount() {
+    return pending.size;
+}
+
+module.exports = { enqueue, getPending, resolve, pendingCount };
