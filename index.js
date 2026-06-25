@@ -1,16 +1,20 @@
-const { Client, GatewayIntentBits, REST, Routes, EmbedBuilder } = require("discord.js");
+const { Client, GatewayIntentBits, REST, Routes, EmbedBuilder, SlashCommandBuilder } = require("discord.js");
 
-const commands = require("./commands");
-const handlers = require("./handler");
-const db       = require("./db");
+const commands  = require("./commands");
+const handlers  = require("./handler");
+const db        = require("./db");
+const ingame    = require("./ingame");
 
 const TOKEN     = process.env.BOT_TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
+const ROBLOX_SECRET = process.env.ROBLOX_SECRET; // shared secret so only your game can POST
 
 if (!TOKEN || !CLIENT_ID) {
-    console.error("[FATAL] BOT_TOKEN or CLIENT_ID is missing from environment variables.");
+    console.error("[FATAL] BOT_TOKEN or CLIENT_ID is missing.");
     process.exit(1);
 }
+
+// ─── Discord Client ────────────────────────────────────────────────────────────
 
 const client = new Client({
     intents: [
@@ -19,21 +23,38 @@ const client = new Client({
     ],
 });
 
+// ─── Register Commands ─────────────────────────────────────────────────────────
+
+const ingameCommand = new SlashCommandBuilder()
+    .setName("ingame")
+    .setDescription("Run a Cmdr command in the Roblox game")
+    .addStringOption(o =>
+        o.setName("command")
+            .setDescription("The full command to run, exactly as you would type it in Cmdr (e.g. ban Zenokei exploiting)")
+            .setRequired(true)
+    )
+    .toJSON();
+
 const rest = new REST({ version: "10" }).setToken(TOKEN);
 
 (async () => {
     try {
-        await rest.put(Routes.applicationCommands(CLIENT_ID), { body: commands });
+        await rest.put(Routes.applicationCommands(CLIENT_ID), {
+            body: [...commands, ingameCommand],
+        });
         console.log("[Bot] Slash commands registered.");
     } catch (err) {
         console.error("[Bot] Failed to register commands:", err);
     }
 })();
 
+// ─── Ready ────────────────────────────────────────────────────────────────────
+
 client.once("clientReady", (c) => {
     console.log(`[Bot] Logged in as ${c.user.tag}`);
     console.log(`[Bot] Serving ${c.guilds.cache.size} server(s).`);
 
+    // Auto-unmute checker — every 60 seconds
     setInterval(async () => {
         const expired = db.getExpiredMutes();
         for (const { guildId, userId } of expired) {
@@ -52,6 +73,8 @@ client.once("clientReady", (c) => {
     }, 60_000);
 });
 
+// ─── Interactions ──────────────────────────────────────────────────────────────
+
 client.on("interactionCreate", async (interaction) => {
     if (!interaction.isChatInputCommand()) return;
     if (!interaction.guild) {
@@ -65,12 +88,7 @@ client.on("interactionCreate", async (interaction) => {
         await handler(interaction);
     } catch (err) {
         console.error(`[Error] /${interaction.commandName} failed:`, err);
-
-        const payload = {
-            content: "Something went wrong while running that command. Please try again.",
-            ephemeral: true,
-        };
-
+        const payload = { content: "Something went wrong. Please try again.", ephemeral: true };
         if (interaction.deferred || interaction.replied) {
             await interaction.editReply(payload).catch(() => {});
         } else {
@@ -78,6 +96,8 @@ client.on("interactionCreate", async (interaction) => {
         }
     }
 });
+
+// ─── Member leave log ──────────────────────────────────────────────────────────
 
 client.on("guildMemberRemove", async (member) => {
     const settings  = db.getGuildSettings(member.guild.id);
@@ -108,7 +128,46 @@ client.on("guildMemberRemove", async (member) => {
     } catch {}
 });
 
+// ─── Express (Roblox HTTP bridge) ─────────────────────────────────────────────
+
+const express = require("express");
+const app     = express();
+app.use(express.json());
+
+// Middleware — validate the shared secret on all /roblox routes
+app.use("/roblox", (req, res, next) => {
+    if (ROBLOX_SECRET && req.headers["x-roblox-secret"] !== ROBLOX_SECRET) {
+        return res.status(401).json({ error: "Unauthorized" });
+    }
+    next();
+});
+
+// Roblox polls this every 2 seconds to get pending commands
+app.get("/roblox/pending", (req, res) => {
+    res.json({ commands: ingame.getPendingCommands() });
+});
+
+// Roblox POSTs the result back here after running a command
+app.post("/roblox/result", (req, res) => {
+    const { id, result, success } = req.body;
+    if (!id) return res.status(400).json({ error: "Missing id" });
+
+    const resolved = ingame.resolveCommand(id, result ?? "No output", success ?? true);
+    if (!resolved) return res.status(404).json({ error: "Command ID not found or already resolved" });
+
+    res.json({ ok: true });
+});
+
+app.get("/", (_req, res) => res.send("Unknown Moderation Bot running."));
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`[Server] Express on port ${PORT}`));
+
+// ─── Login ─────────────────────────────────────────────────────────────────────
+
 client.login(TOKEN).catch(err => {
     console.error("[FATAL] Login failed:", err.message);
     process.exit(1);
 });
+
+module.exports = { client };
