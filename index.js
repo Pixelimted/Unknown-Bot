@@ -27,10 +27,10 @@ const client = new Client({
 
 const ingameCommand = new SlashCommandBuilder()
     .setName("ingame")
-    .setDescription("Run a Cmdr command in the Roblox game")
+    .setDescription("Run a Cmdr command in-game. Use quotes for arguments with spaces.")
     .addStringOption(o =>
         o.setName("command")
-            .setDescription("The full command to run, exactly as you would type it in Cmdr (e.g. ban Zenokei exploiting)")
+            .setDescription('Full command as you'd type in Cmdr. e.g: ban Zenokei exploiting | announce "Hello!" | live Summer true')
             .setRequired(true)
     )
     .toJSON();
@@ -152,7 +152,7 @@ app.post("/roblox/result", (req, res) => {
     const { id, result, success } = req.body;
     if (!id) return res.status(400).json({ error: "Missing id" });
 
-    const resolved = ingame.resolveCommand(id, result ?? "No output", success ?? true);
+    const resolved = ingame.resolve(id, result ?? "No output", success ?? true);
     if (!resolved) return res.status(404).json({ error: "Command ID not found or already resolved" });
 
     res.json({ ok: true });
