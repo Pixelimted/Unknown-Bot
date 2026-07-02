@@ -202,6 +202,13 @@ client.on("guildMemberRemove", async function (member) {
 var app = express();
 app.use(express.json());
 
+// public stats endpoint needs CORS so the website (different domain) can fetch it
+app.use("/stats", function (req, res, next) {
+    res.header("Access-Control-Allow-Origin", "*");
+    res.header("Access-Control-Allow-Methods", "GET");
+    next();
+});
+
 app.use("/roblox", function (req, res, next) {
     if (ROBLOX_SECRET && req.headers["x-roblox-secret"] !== ROBLOX_SECRET) {
         return res.status(401).json({ error: "Unauthorized" });
@@ -234,6 +241,28 @@ app.post("/roblox/result", function (req, res) {
     if (!resolved) return res.status(404).json({ error: "Command ID not found or already resolved" });
 
     res.json({ ok: true });
+});
+
+// public, read-only stats used by the landing page
+app.get("/stats", function (req, res) {
+    var caseStats  = db.getStats();
+    var liveServers = servers.getLiveServers();
+
+    var totalPlayers = 0;
+    for (var i = 0; i < liveServers.length; i++) {
+        totalPlayers += liveServers[i].players.length;
+    }
+
+    res.json({
+        totalCases:    caseStats.totalCases,
+        byType:        caseStats.byType,
+        activeMutes:   caseStats.activeMutes,
+        guildCount:    caseStats.guildCount,
+        liveServers:   liveServers.length,
+        totalPlayers:  totalPlayers,
+        commandCount:  19,
+        updatedAt:     Date.now(),
+    });
 });
 
 app.get("/", function (req, res) {
