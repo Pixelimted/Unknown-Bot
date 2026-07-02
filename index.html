@@ -1,0 +1,540 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Unknown — Moderation for Unknown RNG</title>
+<meta name="description" content="The moderation bot built for Unknown RNG. Bans, mutes, warnings, case logs, and in-game commands, all from Discord.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg: #0a0a0f;
+    --panel: #12121a;
+    --panel-2: #171721;
+    --border: #23232f;
+    --text: #eaeaf2;
+    --text-dim: #9797a8;
+    --text-faint: #5c5c6e;
+    --cyan: #00d9ff;
+    --violet: #7b5fff;
+    --red: #ff4d5e;
+    --amber: #ffb84d;
+    --green: #4dffa0;
+  }
+
+  *{ margin:0; padding:0; box-sizing:border-box; }
+
+  html{ scroll-behavior:smooth; }
+
+  body{
+    background:var(--bg);
+    color:var(--text);
+    font-family:'Inter', sans-serif;
+    -webkit-font-smoothing:antialiased;
+    overflow-x:hidden;
+  }
+
+  .display{ font-family:'Space Grotesk', sans-serif; }
+  .mono{ font-family:'JetBrains Mono', monospace; }
+
+  a{ color:inherit; text-decoration:none; }
+
+  ::selection{ background:var(--cyan); color:#000; }
+
+  /* background grid + glow */
+  .bg-grid{
+    position:fixed; inset:0; z-index:-2;
+    background-image:
+      linear-gradient(to right, rgba(255,255,255,0.025) 1px, transparent 1px),
+      linear-gradient(to bottom, rgba(255,255,255,0.025) 1px, transparent 1px);
+    background-size:48px 48px;
+    mask-image: radial-gradient(ellipse 80% 60% at 50% 0%, #000 40%, transparent 100%);
+  }
+  .bg-glow{
+    position:fixed; top:-20%; left:50%; transform:translateX(-50%);
+    width:900px; height:900px; z-index:-1;
+    background: radial-gradient(circle, rgba(0,217,255,0.10) 0%, rgba(123,95,255,0.06) 40%, transparent 70%);
+    pointer-events:none;
+  }
+
+  /* nav */
+  nav{
+    position:sticky; top:0; z-index:50;
+    display:flex; align-items:center; justify-content:space-between;
+    padding:18px 48px;
+    background:rgba(10,10,15,0.75);
+    backdrop-filter:blur(14px);
+    border-bottom:1px solid var(--border);
+  }
+  .brand{ display:flex; align-items:center; gap:10px; font-weight:700; font-size:1.05rem; letter-spacing:-0.01em;}
+  .brand-mark{
+    width:30px; height:30px; border-radius:8px;
+    background:linear-gradient(135deg, var(--cyan), var(--violet));
+    display:flex; align-items:center; justify-content:center;
+    font-family:'Space Grotesk'; font-weight:700; font-size:0.85rem; color:#04040a;
+  }
+  .nav-links{ display:flex; gap:36px; font-size:0.9rem; color:var(--text-dim); }
+  .nav-links a:hover{ color:var(--text); }
+  .nav-cta{
+    padding:9px 18px; border-radius:8px;
+    background:var(--text); color:#0a0a0f;
+    font-size:0.85rem; font-weight:600;
+    transition:opacity .15s ease;
+  }
+  .nav-cta:hover{ opacity:0.85; }
+
+  @media (max-width: 860px){ .nav-links{ display:none; } }
+
+  /* hero */
+  .hero{
+    padding:120px 48px 90px;
+    max-width:1180px; margin:0 auto;
+    display:grid; grid-template-columns:1.05fr 0.95fr; gap:64px;
+    align-items:center;
+  }
+  .eyebrow{
+    display:inline-flex; align-items:center; gap:8px;
+    font-size:0.78rem; color:var(--cyan); font-weight:600;
+    letter-spacing:0.04em; text-transform:uppercase;
+    padding:6px 12px; border:1px solid rgba(0,217,255,0.25);
+    border-radius:20px; background:rgba(0,217,255,0.06);
+    margin-bottom:24px;
+  }
+  .dot{ width:6px; height:6px; border-radius:50%; background:var(--green); box-shadow:0 0 8px var(--green); }
+
+  .hero h1{
+    font-size:3.6rem; line-height:1.05; letter-spacing:-0.03em;
+    font-weight:700; margin-bottom:22px;
+  }
+  .hero h1 span{
+    background:linear-gradient(90deg, var(--cyan), var(--violet));
+    -webkit-background-clip:text; background-clip:text; color:transparent;
+  }
+  .hero p{
+    font-size:1.08rem; color:var(--text-dim); line-height:1.65;
+    max-width:480px; margin-bottom:34px;
+  }
+  .hero-ctas{ display:flex; gap:14px; margin-bottom:40px; }
+  .btn{
+    padding:13px 24px; border-radius:9px; font-weight:600; font-size:0.92rem;
+    display:inline-flex; align-items:center; gap:8px;
+    transition:transform .15s ease, box-shadow .15s ease, opacity .15s ease;
+  }
+  .btn-primary{
+    background:linear-gradient(90deg, var(--cyan), var(--violet)); color:#04040a;
+    box-shadow:0 0 0 rgba(0,217,255,0);
+  }
+  .btn-primary:hover{ transform:translateY(-2px); box-shadow:0 8px 24px rgba(0,217,255,0.25); }
+  .btn-secondary{
+    background:var(--panel); border:1px solid var(--border); color:var(--text);
+  }
+  .btn-secondary:hover{ border-color:var(--text-faint); transform:translateY(-2px); }
+
+  .hero-stats{ display:flex; gap:36px; }
+  .stat-num{ font-family:'Space Grotesk'; font-size:1.5rem; font-weight:700; }
+  .stat-label{ font-size:0.78rem; color:var(--text-faint); margin-top:2px; }
+  .live-badge{
+    display:flex; align-items:center; gap:8px; margin-top:22px;
+    font-size:0.78rem; color:var(--text-faint); font-family:'JetBrains Mono';
+  }
+  .live-badge.live{ color:var(--green); }
+
+  /* terminal signature element */
+  .terminal{
+    background:var(--panel); border:1px solid var(--border); border-radius:14px;
+    overflow:hidden; box-shadow:0 30px 80px -20px rgba(0,0,0,0.6);
+  }
+  .terminal-bar{
+    display:flex; align-items:center; gap:8px;
+    padding:12px 16px; border-bottom:1px solid var(--border);
+    background:var(--panel-2);
+  }
+  .terminal-dot{ width:10px; height:10px; border-radius:50%; }
+  .terminal-title{
+    margin-left:8px; font-size:0.78rem; color:var(--text-faint);
+    font-family:'JetBrains Mono';
+  }
+  .terminal-body{ padding:18px 20px; font-family:'JetBrains Mono'; font-size:0.82rem; line-height:2; height:340px; overflow:hidden; }
+  .log-line{ display:flex; gap:10px; opacity:0; animation:logIn .4s ease forwards; white-space:nowrap; }
+  .log-time{ color:var(--text-faint); }
+  .tag{ padding:1px 7px; border-radius:4px; font-weight:600; font-size:0.72rem; }
+  .tag-ban{ background:rgba(255,77,94,0.15); color:var(--red); }
+  .tag-warn{ background:rgba(255,184,77,0.15); color:var(--amber); }
+  .tag-kick{ background:rgba(255,184,77,0.15); color:var(--amber); }
+  .tag-mute{ background:rgba(123,95,255,0.18); color:#b3a3ff; }
+  .tag-ingame{ background:rgba(0,217,255,0.15); color:var(--cyan); }
+  .log-text{ color:var(--text-dim); }
+  .log-text b{ color:var(--text); font-weight:600; }
+
+  @keyframes logIn{ from{ opacity:0; transform:translateY(4px);} to{ opacity:1; transform:translateY(0);} }
+
+  @media (max-width: 980px){
+    .hero{ grid-template-columns:1fr; padding-top:90px; }
+    .hero h1{ font-size:2.5rem; }
+    .terminal{ order:-1; }
+  }
+
+  /* section shared */
+  section{ max-width:1180px; margin:0 auto; padding:100px 48px; }
+  .section-head{ max-width:560px; margin-bottom:56px; }
+  .section-eyebrow{ font-size:0.78rem; color:var(--violet); font-weight:600; letter-spacing:0.04em; text-transform:uppercase; margin-bottom:14px; }
+  .section-head h2{ font-size:2.2rem; letter-spacing:-0.02em; font-weight:700; margin-bottom:14px; }
+  .section-head p{ color:var(--text-dim); font-size:1.02rem; line-height:1.6; }
+
+  /* feature grid */
+  .grid{ display:grid; grid-template-columns:repeat(3, 1fr); gap:1px; background:var(--border); border:1px solid var(--border); border-radius:16px; overflow:hidden; }
+  .card{ background:var(--panel); padding:32px 28px; transition:background .2s ease; }
+  .card:hover{ background:var(--panel-2); }
+  .card-icon{
+    width:38px; height:38px; border-radius:9px; margin-bottom:18px;
+    display:flex; align-items:center; justify-content:center;
+    background:rgba(0,217,255,0.08); border:1px solid rgba(0,217,255,0.18);
+  }
+  .card h3{ font-size:1.02rem; font-weight:600; margin-bottom:8px; letter-spacing:-0.01em; }
+  .card p{ font-size:0.88rem; color:var(--text-dim); line-height:1.6; }
+  .stats-grid .card h3{ font-family:'Space Grotesk'; font-size:2.1rem; font-weight:700; color:var(--cyan); }
+  .stats-grid .card p{ font-size:0.85rem; }
+
+  @media (max-width: 900px){ .grid{ grid-template-columns:1fr 1fr; } }
+  @media (max-width: 620px){ .grid{ grid-template-columns:1fr; } }
+
+  /* command table */
+  .cmd-table{ border:1px solid var(--border); border-radius:14px; overflow:hidden; }
+  .cmd-row{
+    display:grid; grid-template-columns:200px 1fr; gap:24px;
+    padding:18px 26px; border-bottom:1px solid var(--border);
+    align-items:center;
+  }
+  .cmd-row:last-child{ border-bottom:none; }
+  .cmd-row:nth-child(even){ background:rgba(255,255,255,0.012); }
+  .cmd-name{ font-family:'JetBrains Mono'; font-size:0.88rem; color:var(--cyan); font-weight:500; }
+  .cmd-desc{ font-size:0.88rem; color:var(--text-dim); }
+
+  @media (max-width: 640px){
+    .cmd-row{ grid-template-columns:1fr; gap:6px; }
+  }
+
+  /* in-game callout */
+  .callout{
+    display:grid; grid-template-columns:1fr 1fr; gap:56px; align-items:center;
+    background:linear-gradient(160deg, var(--panel), var(--panel-2));
+    border:1px solid var(--border); border-radius:20px; padding:56px;
+  }
+  .callout-visual{
+    border:1px solid var(--border); border-radius:12px; background:var(--bg);
+    padding:22px; font-family:'JetBrains Mono'; font-size:0.8rem;
+  }
+  .callout-visual .row{ display:flex; justify-content:space-between; padding:9px 0; border-bottom:1px solid var(--border); }
+  .callout-visual .row:last-child{ border-bottom:none; }
+  .callout-visual .room{ color:var(--text); }
+  .callout-visual .players{ color:var(--text-faint); }
+  .pulse{ width:7px; height:7px; border-radius:50%; background:var(--green); display:inline-block; margin-right:8px; box-shadow:0 0 6px var(--green); }
+
+  @media (max-width: 900px){ .callout{ grid-template-columns:1fr; padding:36px; } }
+
+  /* footer cta */
+  .final-cta{
+    text-align:center; padding:120px 48px;
+    border-top:1px solid var(--border);
+  }
+  .final-cta h2{ font-size:2.4rem; letter-spacing:-0.02em; margin-bottom:16px; font-weight:700; }
+  .final-cta p{ color:var(--text-dim); margin-bottom:36px; }
+
+  footer{
+    border-top:1px solid var(--border);
+    padding:32px 48px; display:flex; justify-content:space-between; align-items:center;
+    font-size:0.82rem; color:var(--text-faint);
+  }
+  footer a:hover{ color:var(--text-dim); }
+  .footer-links{ display:flex; gap:24px; }
+</style>
+</head>
+<body>
+
+<div class="bg-grid"></div>
+<div class="bg-glow"></div>
+
+<nav>
+  <div class="brand">
+    <div class="brand-mark">U</div>
+    Unknown
+  </div>
+  <div class="nav-links">
+    <a href="#features">Features</a>
+    <a href="#commands">Commands</a>
+    <a href="#ingame">In-Game</a>
+  </div>
+  <a href="#" class="nav-cta">Add to Discord</a>
+</nav>
+
+<section class="hero">
+  <div>
+    <div class="eyebrow"><span class="dot"></span> Built for Unknown RNG</div>
+    <h1 class="display">Moderation that reaches <span>into the game.</span></h1>
+    <p>Unknown handles bans, mutes, and warnings like any good mod bot &mdash; then goes further, running live commands directly inside your Roblox servers from a single Discord command.</p>
+    <div class="hero-ctas">
+      <a href="#" class="btn btn-primary">Add to Discord</a>
+      <a href="#commands" class="btn btn-secondary">View Commands</a>
+    </div>
+    <div class="hero-stats">
+      <div>
+        <div class="stat-num display" id="stat-cases">-</div>
+        <div class="stat-label">Total Cases</div>
+      </div>
+      <div>
+        <div class="stat-num display" id="stat-servers">-</div>
+        <div class="stat-label">Live Servers</div>
+      </div>
+      <div>
+        <div class="stat-num display" id="stat-players">-</div>
+        <div class="stat-label">Players Online</div>
+      </div>
+    </div>
+    <div class="live-badge" id="live-badge">
+      <span class="pulse"></span><span id="live-status">Connecting to live stats...</span>
+    </div>
+  </div>
+
+  <div class="terminal">
+    <div class="terminal-bar">
+      <div class="terminal-dot" style="background:#ff5f57;"></div>
+      <div class="terminal-dot" style="background:#febc2e;"></div>
+      <div class="terminal-dot" style="background:#28c840;"></div>
+      <div class="terminal-title">#mod-log</div>
+    </div>
+    <div class="terminal-body" id="log-body"></div>
+  </div>
+</section>
+
+<section id="features">
+  <div class="section-head">
+    <div class="section-eyebrow">Core Moderation</div>
+    <h2 class="display">Every action, logged twice.</h2>
+    <p>A summary line for the overview channel, a full case card for the detailed log. Nothing gets missed, nothing gets buried.</p>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <div class="card-icon">⛔</div>
+      <h3>Bans &amp; Timed Bans</h3>
+      <p>Permanent or scheduled, with optional message history cleanup and full DM notice to the user.</p>
+    </div>
+    <div class="card">
+      <div class="card-icon">👢</div>
+      <h3>Kicks</h3>
+      <p>Instant removal with reason logging and role-hierarchy checks baked in.</p>
+    </div>
+    <div class="card">
+      <div class="card-icon">🔇</div>
+      <h3>Mutes</h3>
+      <p>Native timeout-based mutes up to 28 days, with automatic expiry tracked in the background.</p>
+    </div>
+    <div class="card">
+      <div class="card-icon">⚠️</div>
+      <h3>Warnings</h3>
+      <p>Every warning counts toward auto-escalation &mdash; kick at 3, ban at 5, no manual tracking needed.</p>
+    </div>
+    <div class="card">
+      <div class="card-icon">🗂️</div>
+      <h3>Case History</h3>
+      <p>Pull a user's full record with <span class="mono">/cases</span>, or look up any single case by ID.</p>
+    </div>
+    <div class="card">
+      <div class="card-icon">🔗</div>
+      <h3>Roblox Linking</h3>
+      <p>Attach a Roblox username to any Discord account so every case carries their in-game identity.</p>
+    </div>
+  </div>
+</section>
+
+<section id="commands">
+  <div class="section-head">
+    <div class="section-eyebrow">Reference</div>
+    <h2 class="display">Commands</h2>
+    <p>Every command respects your mod role and Discord permissions together &mdash; both need to check out.</p>
+  </div>
+
+  <div class="cmd-table">
+    <div class="cmd-row"><div class="cmd-name">/ban</div><div class="cmd-desc">Ban a user, permanently or for a set duration</div></div>
+    <div class="cmd-row"><div class="cmd-name">/unban</div><div class="cmd-desc">Lift a ban using a user ID</div></div>
+    <div class="cmd-row"><div class="cmd-name">/kick</div><div class="cmd-desc">Remove a user from the server</div></div>
+    <div class="cmd-row"><div class="cmd-name">/mute</div><div class="cmd-desc">Timeout a user for a given duration</div></div>
+    <div class="cmd-row"><div class="cmd-name">/unmute</div><div class="cmd-desc">Lift an active timeout early</div></div>
+    <div class="cmd-row"><div class="cmd-name">/warn</div><div class="cmd-desc">Log a warning, counts toward auto-escalation</div></div>
+    <div class="cmd-row"><div class="cmd-name">/unwarn</div><div class="cmd-desc">Remove a warning by case ID</div></div>
+    <div class="cmd-row"><div class="cmd-name">/note</div><div class="cmd-desc">Attach a private mod-only note to a user</div></div>
+    <div class="cmd-row"><div class="cmd-name">/cases</div><div class="cmd-desc">View a user's full moderation history</div></div>
+    <div class="cmd-row"><div class="cmd-name">/case</div><div class="cmd-desc">Look up one case by its ID</div></div>
+    <div class="cmd-row"><div class="cmd-name">/viewlog</div><div class="cmd-desc">See recent moderation activity server-wide</div></div>
+    <div class="cmd-row"><div class="cmd-name">/reason</div><div class="cmd-desc">Edit the reason on an existing case</div></div>
+    <div class="cmd-row"><div class="cmd-name">/roblox</div><div class="cmd-desc">Link, view, or remove a Roblox username</div></div>
+    <div class="cmd-row"><div class="cmd-name">/purge</div><div class="cmd-desc">Bulk delete messages, optionally by user</div></div>
+    <div class="cmd-row"><div class="cmd-name">/slowmode</div><div class="cmd-desc">Set a channel's slowmode delay</div></div>
+    <div class="cmd-row"><div class="cmd-name">/lock &amp; /unlock</div><div class="cmd-desc">Restrict or restore send permissions in a channel</div></div>
+    <div class="cmd-row"><div class="cmd-name">/userinfo</div><div class="cmd-desc">Pull account age, roles, and case count</div></div>
+    <div class="cmd-row"><div class="cmd-name">/ingame</div><div class="cmd-desc">Pick a live server and run a command inside it</div></div>
+    <div class="cmd-row"><div class="cmd-name">/setup</div><div class="cmd-desc">Configure mod role and log channels</div></div>
+  </div>
+</section>
+
+<section id="stats">
+  <div class="section-head">
+    <div class="section-eyebrow">Right Now</div>
+    <h2 class="display">Live from the bot.</h2>
+    <p>Pulled directly from Unknown's database and its connected Roblox servers. Refreshes every 30 seconds.</p>
+  </div>
+
+  <div class="grid stats-grid">
+    <div class="card">
+      <div class="card-icon">⛔</div>
+      <h3 id="stat-bans">-</h3>
+      <p>Bans issued</p>
+    </div>
+    <div class="card">
+      <div class="card-icon">👢</div>
+      <h3 id="stat-kicks">-</h3>
+      <p>Kicks issued</p>
+    </div>
+    <div class="card">
+      <div class="card-icon">🔇</div>
+      <h3 id="stat-mutes-active">-</h3>
+      <p>Active mutes right now</p>
+    </div>
+    <div class="card">
+      <div class="card-icon">⚠️</div>
+      <h3 id="stat-warns">-</h3>
+      <p>Warnings logged</p>
+    </div>
+    <div class="card">
+      <div class="card-icon">🖥️</div>
+      <h3 id="stat-servers-2">-</h3>
+      <p>Roblox servers online</p>
+    </div>
+    <div class="card">
+      <div class="card-icon">🏠</div>
+      <h3 id="stat-guilds">-</h3>
+      <p>Discord servers protected</p>
+    </div>
+  </div>
+</section>
+
+<section id="ingame">
+  <div class="callout">
+    <div>
+      <div class="section-eyebrow">The Part Most Bots Don't Do</div>
+      <h2 class="display" style="font-size:2rem; margin-bottom:16px;">Run commands where the game actually lives.</h2>
+      <p style="color:var(--text-dim); line-height:1.65; margin-bottom:24px;">
+        <span class="mono" style="color:var(--cyan);">/ingame</span> shows every live Roblox server tied to your game, public and private, with real player counts pulled straight from the servers themselves. Pick one, type a command, and it runs through Cmdr in that exact server &mdash; no restart, no waiting.
+      </p>
+      <a href="#" class="btn btn-secondary">See how it connects</a>
+    </div>
+    <div class="callout-visual">
+      <div class="row"><span class="room"><span class="pulse"></span>Public Server 1</span><span class="players">14 players</span></div>
+      <div class="row"><span class="room"><span class="pulse"></span>Public Server 2</span><span class="players">9 players</span></div>
+      <div class="row"><span class="room"><span class="pulse"></span>Reserved Server</span><span class="players">3 players</span></div>
+      <div class="row"><span class="room"><span class="pulse"></span>Private Server</span><span class="players">1 player</span></div>
+    </div>
+  </div>
+</section>
+
+<div class="final-cta">
+  <h2 class="display">Set it up in under a minute.</h2>
+  <p>Add Unknown, set your mod role and log channels, and you're covered.</p>
+  <a href="#" class="btn btn-primary">Add to Discord</a>
+</div>
+
+<footer>
+  <div>Unknown &mdash; built for Unknown RNG</div>
+  <div class="footer-links">
+    <a href="#commands">Commands</a>
+    <a href="#ingame">In-Game</a>
+  </div>
+</footer>
+
+<script>
+  const logs = [
+    { tag: "BAN",    cls: "tag-ban",    text: '<b>ysl_zenokei</b> banned for exploiting' },
+    { tag: "WARN",   cls: "tag-warn",   text: '<b>quartz_dev</b> warned — spam in #trading' },
+    { tag: "MUTE",   cls: "tag-mute",   text: '<b>foggyrbx</b> muted for 1h' },
+    { tag: "KICK",   cls: "tag-kick",   text: '<b>nullbyte</b> kicked — alt account' },
+    { tag: "INGAME", cls: "tag-ingame", text: 'ran <b>extinction</b> in Public Server 2' },
+    { tag: "BAN",    cls: "tag-ban",    text: '<b>rustyrbx</b> banned 7d — item dupe' },
+    { tag: "WARN",   cls: "tag-warn",   text: '<b>ember_x</b> warned — 2/3' },
+    { tag: "INGAME", cls: "tag-ingame", text: 'ran <b>announce</b> in Public Server 1' },
+    { tag: "MUTE",   cls: "tag-mute",   text: '<b>lunarshade</b> muted for 30m' },
+    { tag: "UNBAN",  cls: "tag-mute",   text: '<b>ghostwire</b> appeal accepted' },
+  ];
+
+  function timeNow(){
+    const d = new Date();
+    return d.toLocaleTimeString('en-US', { hour12:false, hour:'2-digit', minute:'2-digit', second:'2-digit' });
+  }
+
+  const body = document.getElementById('log-body');
+  let i = 0;
+
+  function pushLog(){
+    const entry = logs[i % logs.length];
+    const line = document.createElement('div');
+    line.className = 'log-line';
+    line.innerHTML = `<span class="log-time">${timeNow()}</span><span class="tag ${entry.cls}">${entry.tag}</span><span class="log-text">${entry.text}</span>`;
+    body.appendChild(line);
+    if (body.children.length > 12) body.removeChild(body.firstChild);
+    body.scrollTop = body.scrollHeight;
+    i++;
+  }
+
+  for (let n = 0; n < 8; n++) pushLog();
+  setInterval(pushLog, 2200);
+
+  const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if (reduceMotion) {
+    document.querySelectorAll('.log-line').forEach(el => el.style.animation = 'none');
+  }
+
+  // ── Live stats ──────────────────────────────────────────────────────────────
+  // Replace this with your Unknown bot's actual Railway URL.
+  const STATS_API = "https://unknown-bot-production.up.railway.app/stats";
+
+  function fmt(n){
+    if (n === undefined || n === null) return "-";
+    return n.toLocaleString();
+  }
+
+  async function loadStats(){
+    const badge = document.getElementById('live-badge');
+    const status = document.getElementById('live-status');
+
+    try {
+      const res = await fetch(STATS_API, { cache: "no-store" });
+      if (!res.ok) throw new Error("bad response");
+      const data = await res.json();
+
+      document.getElementById('stat-cases').textContent   = fmt(data.totalCases);
+      document.getElementById('stat-servers').textContent = fmt(data.liveServers);
+      document.getElementById('stat-players').textContent = fmt(data.totalPlayers);
+
+      document.getElementById('stat-bans').textContent         = fmt(data.byType?.ban);
+      document.getElementById('stat-kicks').textContent        = fmt(data.byType?.kick);
+      document.getElementById('stat-mutes-active').textContent = fmt(data.activeMutes);
+      document.getElementById('stat-warns').textContent        = fmt(data.byType?.warn);
+      document.getElementById('stat-servers-2').textContent    = fmt(data.liveServers);
+      document.getElementById('stat-guilds').textContent       = fmt(data.guildCount);
+
+      badge.classList.add('live');
+      status.textContent = "Live — updated just now";
+    } catch (err) {
+      badge.classList.remove('live');
+      status.textContent = "Stats unavailable right now";
+      console.error("Failed to load stats:", err);
+    }
+  }
+
+  loadStats();
+  setInterval(loadStats, 30000);
+</script>
+
+</body>
+</html>
