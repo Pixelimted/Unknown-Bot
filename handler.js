@@ -579,12 +579,12 @@ handlers.unlock = async (interaction) => {
 
 // ── Userinfo ──────────────────────────────────────────────────────────────────
 handlers.userinfo = async (interaction) => {
-    const targetUser   = interaction.options.getUser("user") || interaction.user;
-    const guild        = interaction.guild;
-    const targetMember = await guild.members.fetch(targetUser.id).catch(() => null);
-    const roblox       = db.getRobloxUsername(targetUser.id);
-    const cases        = db.getUserCases(guild.id, targetUser.id).filter(c => !c.removed);
-    const warns        = cases.filter(c => c.type === "warn").length;
+    const targetUser     = interaction.options.getUser("user") || interaction.user;
+    const guild          = interaction.guild;
+    const targetMember   = await guild.members.fetch(targetUser.id).catch(() => null);
+    const robloxUsername = db.getRobloxUsername(targetUser.id);
+    const cases          = db.getUserCases(guild.id, targetUser.id).filter(c => !c.removed);
+    const warns          = cases.filter(c => c.type === "warn").length;
 
     const roles = targetMember
         ? targetMember.roles.cache
@@ -603,7 +603,7 @@ handlers.userinfo = async (interaction) => {
             { name: "ID",             value: targetUser.id,                                                            inline: true  },
             { name: "Account Created", value: utils.timestamp(targetUser.createdAt),                                   inline: true  },
             { name: "Joined Server",  value: targetMember ? utils.timestamp(targetMember.joinedAt) : "Not in server", inline: true  },
-            { name: "Roblox",         value: roblox || "Not linked",                                                   inline: true  },
+            { name: "Roblox",         value: robloxUsername || "Not linked",                                          inline: true  },
             { name: "Warnings",       value: `${warns}`,                                                               inline: true  },
             { name: "Total Cases",    value: `${cases.length}`,                                                        inline: true  },
             { name: "Roles",          value: roles,                                                                    inline: false },
@@ -657,31 +657,44 @@ handlers.setup = async (interaction) => {
     }
 };
 
-module.exports = handlers;
-
 // ── Ingame ────────────────────────────────────────────────────────────────────
+// Step 1: /ingame shows a dropdown of live servers pulled from heartbeat data.
+// Step 2: picking a server opens a modal asking for the command.
+// Step 3: submitting the modal queues the command targeted at that JobId only.
 handlers.ingame = async (interaction) => {
     if (!await utils.hasModPermission(interaction)) return utils.noPermissionReply(interaction);
 
-    const ingame  = require("./ingame");
-    const command = interaction.options.getString("command").trim();
+    const servers = require("./servers");
+    const live     = servers.getLiveServers();
 
-    if (!command) return utils.errorReply(interaction, "Please provide a command to run.");
+    if (!live.length) {
+        return utils.errorReply(interaction, "No live Roblox servers are currently reporting in. Make sure the game is running and the bridge script is active.");
+    }
 
-    await interaction.deferReply();
+    const { StringSelectMenuBuilder, ActionRowBuilder } = require("discord.js");
 
-    const { success, result } = await ingame.enqueue(command, interaction.channelId, interaction.user.id);
+    const options = live.slice(0, 25).map((s, i) => {
+        const label   = `${s.visitType || "Public"} Server ${i + 1} — ${s.players.length} player(s)`;
+        const preview = s.players.slice(0, 3).join(", ") + (s.players.length > 3 ? "..." : "");
+        return {
+            label:       label.slice(0, 100),
+            description: (preview || "No players in this server").slice(0, 100),
+            value:       s.jobId,
+        };
+    });
 
-    const embed = new EmbedBuilder()
-        .setColor(success ? utils.COLORS.success : utils.COLORS.error)
-        .setTitle(success ? "Command Executed" : "Command Failed")
-        .addFields(
-            { name: "Command", value: `\`${command}\``,                    inline: false },
-            { name: "Result",  value: result || "No output returned.",     inline: false },
-            { name: "Ran by",  value: `${interaction.user.tag}`,           inline: true  },
-            { name: "Queue",   value: `${ingame.pendingCount()} pending`,  inline: true  },
-        )
-        .setTimestamp();
+    const row = new ActionRowBuilder().addComponents(
+        new StringSelectMenuBuilder()
+            .setCustomId("ingame_pick_server")
+            .setPlaceholder("Select a server to run a command in")
+            .addOptions(options)
+    );
 
-    return interaction.editReply({ embeds: [embed] });
+    return interaction.reply({
+        content: `Found ${live.length} live server(s). Pick one to run a command in:`,
+        components: [row],
+        ephemeral: true,
+    });
 };
+
+module.exports = handlers;
