@@ -5,7 +5,10 @@ const {
     Routes,
     EmbedBuilder,
     SlashCommandBuilder,
-    Events, // Added Events for correct Discord handling
+    ModalBuilder,
+    TextInputBuilder,
+    TextInputStyle,
+    ActionRowBuilder,
 } = require("discord.js");
 
 const express  = require("express");
@@ -13,11 +16,12 @@ const commands = require("./commands");
 const handlers = require("./handler");
 const db       = require("./db");
 const ingame   = require("./ingame");
+const servers  = require("./servers");
 
 const TOKEN         = process.env.BOT_TOKEN;
 const CLIENT_ID     = process.env.CLIENT_ID;
 const ROBLOX_SECRET = process.env.ROBLOX_SECRET;
-const PORT          = process.env.PORT || 3000; // Railway automatically injects this variable
+const PORT          = process.env.PORT || 3000;
 
 if (!TOKEN || !CLIENT_ID) {
     console.error("[FATAL] BOT_TOKEN or CLIENT_ID is missing.");
@@ -37,13 +41,7 @@ const client = new Client({
 
 const ingameCommand = new SlashCommandBuilder()
     .setName("ingame")
-    .setDescription("Run a Cmdr command in the Roblox game")
-    .addStringOption(function(o) {
-        return o
-            .setName("command")
-            .setDescription("Full Cmdr command e.g: ban Zenokei exploiting | announce Hello | extinction")
-            .setRequired(true);
-    })
+    .setDescription("Pick a live Roblox server and run a Cmdr command in it")
     .toJSON();
 
 const allCommands = commands.concat([ingameCommand]);
@@ -52,29 +50,28 @@ const allCommands = commands.concat([ingameCommand]);
 
 const rest = new REST({ version: "10" }).setToken(TOKEN);
 
-(async function() {
+(async function () {
     try {
         await rest.put(Routes.applicationCommands(CLIENT_ID), { body: allCommands });
         console.log("[Bot] Slash commands registered.");
     } catch (err) {
         console.error("[Bot] Failed to register commands:", err);
     }
-}());
+})();
 
 // ── Ready ──────────────────────────────────────────────────────────────────────
 
-// FIXED: "clientReady" is incorrect in discord.js v14. Changed to Events.ClientReady.
-client.once(Events.ClientReady, function(c) {
+client.once("clientReady", function (c) {
     console.log("[Bot] Logged in as " + c.user.tag);
     console.log("[Bot] Serving " + c.guilds.cache.size + " server(s).");
 
-    setInterval(async function() {
+    setInterval(async function () {
         var expired = db.getExpiredMutes();
         for (var i = 0; i < expired.length; i++) {
             var item = expired[i];
             try {
                 var guild  = await client.guilds.fetch(item.guildId);
-                var member = await guild.members.fetch(item.userId).catch(function() { return null; });
+                var member = await guild.members.fetch(item.userId).catch(function () { return null; });
                 if (member && member.isCommunicationDisabled()) {
                     await member.timeout(null, "Mute duration expired");
                 }
@@ -89,7 +86,65 @@ client.once(Events.ClientReady, function(c) {
 
 // ── Interactions ───────────────────────────────────────────────────────────────
 
-client.on("interactionCreate", async function(interaction) {
+client.on("interactionCreate", async function (interaction) {
+
+    // ── Step 2: server picked from dropdown, open the command modal ────────────
+    if (interaction.isStringSelectMenu() && interaction.customId === "ingame_pick_server") {
+        const jobId = interaction.values[0];
+        const server = servers.getServer(jobId);
+
+        if (!server) {
+            return interaction.update({ content: "That server is no longer live. Run `/ingame` again.", components: [] });
+        }
+
+        const modal = new ModalBuilder()
+            .setCustomId("ingame_run_" + jobId)
+            .setTitle("Run Command In Server");
+
+        const input = new TextInputBuilder()
+            .setCustomId("command_input")
+            .setLabel("Cmdr Command")
+            .setPlaceholder('e.g: ban Zenokei exploiting | announce "Hello!" | extinction')
+            .setStyle(TextInputStyle.Short)
+            .setRequired(true);
+
+        modal.addComponents(new ActionRowBuilder().addComponents(input));
+
+        return interaction.showModal(modal);
+    }
+
+    // ── Step 3: command modal submitted, queue it for that specific server ─────
+    if (interaction.isModalSubmit() && interaction.customId.startsWith("ingame_run_")) {
+        const jobId   = interaction.customId.replace("ingame_run_", "");
+        const command = interaction.fields.getTextInputValue("command_input").trim();
+
+        if (!command) {
+            return interaction.reply({ content: "No command entered.", ephemeral: true });
+        }
+
+        const server = servers.getServer(jobId);
+        if (!server) {
+            return interaction.reply({ content: "That server went offline before the command could run.", ephemeral: true });
+        }
+
+        await interaction.deferReply();
+
+        const { success, result } = await ingame.enqueue(command, jobId, interaction.channelId, interaction.user.id);
+
+        const embed = new EmbedBuilder()
+            .setColor(success ? 0x2ECC71 : 0xE74C3C)
+            .setTitle(success ? "Command Executed" : "Command Failed")
+            .addFields(
+                { name: "Command",  value: "`" + command + "`",                                          inline: false },
+                { name: "Server",   value: (server.visitType || "Public") + " — " + server.players.length + " player(s)", inline: true },
+                { name: "Result",   value: result || "No output returned.",                               inline: false },
+                { name: "Ran by",   value: interaction.user.tag,                                          inline: true  },
+            )
+            .setTimestamp();
+
+        return interaction.editReply({ embeds: [embed] });
+    }
+
     if (!interaction.isChatInputCommand()) return;
     if (!interaction.guild) {
         return interaction.reply({ content: "Commands must be used inside a server.", ephemeral: true });
@@ -104,16 +159,16 @@ client.on("interactionCreate", async function(interaction) {
         console.error("[Error] /" + interaction.commandName + " failed:", err);
         var payload = { content: "Something went wrong. Please try again.", ephemeral: true };
         if (interaction.deferred || interaction.replied) {
-            await interaction.editReply(payload).catch(function() {});
+            await interaction.editReply(payload).catch(function () {});
         } else {
-            await interaction.reply(payload).catch(function() {});
+            await interaction.reply(payload).catch(function () {});
         }
     }
 });
 
 // ── Member leave log ───────────────────────────────────────────────────────────
 
-client.on("guildMemberRemove", async function(member) {
+client.on("guildMemberRemove", async function (member) {
     var settings  = db.getGuildSettings(member.guild.id);
     var channelId = settings.summaryLogChannelId;
     if (!channelId) return;
@@ -147,18 +202,28 @@ client.on("guildMemberRemove", async function(member) {
 var app = express();
 app.use(express.json());
 
-app.use("/roblox", function(req, res, next) {
+app.use("/roblox", function (req, res, next) {
     if (ROBLOX_SECRET && req.headers["x-roblox-secret"] !== ROBLOX_SECRET) {
         return res.status(401).json({ error: "Unauthorized" });
     }
     next();
 });
 
-app.get("/roblox/pending", function(req, res) {
-    res.json({ commands: ingame.getPending() });
+// Roblox servers heartbeat here every ~15s so the bot knows which servers are live
+app.post("/roblox/heartbeat", function (req, res) {
+    var ok = servers.heartbeat(req.body);
+    if (!ok) return res.status(400).json({ error: "Missing jobId" });
+    res.json({ ok: true });
 });
 
-app.post("/roblox/result", function(req, res) {
+// Roblox polls this per-server, only gets commands targeted at its own jobId
+app.get("/roblox/pending", function (req, res) {
+    var jobId = req.query.jobId;
+    if (!jobId) return res.status(400).json({ error: "Missing jobId query param" });
+    res.json({ commands: ingame.getPendingFor(jobId) });
+});
+
+app.post("/roblox/result", function (req, res) {
     var id      = req.body.id;
     var result  = req.body.result;
     var success = req.body.success;
@@ -171,18 +236,17 @@ app.post("/roblox/result", function(req, res) {
     res.json({ ok: true });
 });
 
-app.get("/", function(req, res) {
+app.get("/", function (req, res) {
     res.send("Unknown Moderation Bot running.");
 });
 
-// FIXED: Explicitly bind to '0.0.0.0' so Railway's proxy system can reach the application
-app.listen(PORT, "0.0.0.0", function() {
-    console.log("[Server] Express server actively listening on port " + PORT);
+app.listen(PORT, function () {
+    console.log("[Server] Express on port " + PORT);
 });
 
 // ── Login ──────────────────────────────────────────────────────────────────────
 
-client.login(TOKEN).catch(function(err) {
+client.login(TOKEN).catch(function (err) {
     console.error("[FATAL] Login failed: " + err.message);
     process.exit(1);
 });
