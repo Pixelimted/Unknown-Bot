@@ -1,3 +1,4 @@
+
 const fs   = require("fs");
 const path = require("path");
 
@@ -134,9 +135,42 @@ function getExpiredMutes() {
     return list;
 }
 
+function getStats() {
+    const cases = getCases();
+    const mutes = getMutes();
+
+    let totalCases = 0;
+    const byType = { ban: 0, kick: 0, mute: 0, warn: 0, note: 0, unban: 0, unmute: 0 };
+
+    for (const guildId in cases) {
+        const entries = cases[guildId].entries || {};
+        for (const id in entries) {
+            totalCases += 1;
+            const type = entries[id].type;
+            if (byType[type] !== undefined) byType[type] += 1;
+        }
+    }
+
+    let activeMutes = 0;
+    const now = Date.now();
+    for (const guildId in mutes) {
+        for (const userId in mutes[guildId]) {
+            if (mutes[guildId][userId] > now) activeMutes += 1;
+        }
+    }
+
+    return {
+        totalCases: totalCases,
+        byType: byType,
+        activeMutes: activeMutes,
+        guildCount: Object.keys(cases).length,
+    };
+}
+
 module.exports = {
     addCase, getCase, getUserCases, getUserWarnCount, updateCase,
     getGuildSettings, setGuildSettings,
     getRobloxUsername, setRobloxUsername,
     addMute, removeMute, getExpiredMutes,
+    getStats,
 };
