@@ -253,6 +253,47 @@ app.get("/stats", function (req, res) {
         totalPlayers += liveServers[i].players.length;
     }
 
+// Add CORS support for your command route
+app.use("/api/run-command", function (req, res, next) {
+    res.header("Access-Control-Allow-Origin", "*");
+    res.header("Access-Control-Allow-Methods", "POST");
+    res.header("Access-Control-Allow-Headers", "Content-Type");
+    next();
+});
+
+// The command endpoint called by your web console
+app.post("/api/run-command", async function (req, res) {
+    var command = req.body.command;
+    var target  = req.body.target; // This is the jobId sent from the website dropdown
+
+    if (!command) {
+        return res.status(400).json({ error: "No command text provided." });
+    }
+
+    // "all" means broadcast across all game shards, otherwise target the specific jobId
+    if (target === "all") {
+        var live = servers.getLiveServers();
+        if (!live.length) {
+            return res.status(400).json({ error: "No live servers online to broadcast to." });
+        }
+        
+        for (var i = 0; i < live.length; i++) {
+            await ingame.enqueue(command, live[i].jobId, "WebPanel", "DashboardAdmin");
+        }
+        return res.json({ success: true, message: "Command sent to all active servers." });
+    } else {
+        var server = servers.getServer(target);
+        if (!server) {
+            return res.status(404).json({ error: "The targeted server went offline." });
+        }
+
+        // Push the command straight into your bot's pending game queue
+        await ingame.enqueue(command, target, "WebPanel", "DashboardAdmin");
+        return res.json({ success: true, message: "Command pushed to server queue." });
+    }
+});
+
+    
     res.json({
         totalCases:    caseStats.totalCases,
         byType:        caseStats.byType,
