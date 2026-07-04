@@ -209,6 +209,14 @@ app.use("/stats", function (req, res, next) {
     next();
 });
 
+app.use("/api", function (req, res, next) {
+    res.header("Access-Control-Allow-Origin", "*");
+    res.header("Access-Control-Allow-Methods", "GET, POST");
+    res.header("Access-Control-Allow-Headers", "Authorization, Content-Type");
+    if (req.method === "OPTIONS") return res.sendStatus(204);
+    next();
+});
+
 app.use("/roblox", function (req, res, next) {
     if (ROBLOX_SECRET && req.headers["x-roblox-secret"] !== ROBLOX_SECRET) {
         return res.status(401).json({ error: "Unauthorized" });
@@ -253,47 +261,6 @@ app.get("/stats", function (req, res) {
         totalPlayers += liveServers[i].players.length;
     }
 
-// Add CORS support for your command route
-app.use("/api/run-command", function (req, res, next) {
-    res.header("Access-Control-Allow-Origin", "*");
-    res.header("Access-Control-Allow-Methods", "POST");
-    res.header("Access-Control-Allow-Headers", "Content-Type");
-    next();
-});
-
-// The command endpoint called by your web console
-app.post("/api/run-command", async function (req, res) {
-    var command = req.body.command;
-    var target  = req.body.target; // This is the jobId sent from the website dropdown
-
-    if (!command) {
-        return res.status(400).json({ error: "No command text provided." });
-    }
-
-    // "all" means broadcast across all game shards, otherwise target the specific jobId
-    if (target === "all") {
-        var live = servers.getLiveServers();
-        if (!live.length) {
-            return res.status(400).json({ error: "No live servers online to broadcast to." });
-        }
-        
-        for (var i = 0; i < live.length; i++) {
-            await ingame.enqueue(command, live[i].jobId, "WebPanel", "DashboardAdmin");
-        }
-        return res.json({ success: true, message: "Command sent to all active servers." });
-    } else {
-        var server = servers.getServer(target);
-        if (!server) {
-            return res.status(404).json({ error: "The targeted server went offline." });
-        }
-
-        // Push the command straight into your bot's pending game queue
-        await ingame.enqueue(command, target, "WebPanel", "DashboardAdmin");
-        return res.json({ success: true, message: "Command pushed to server queue." });
-    }
-});
-
-    
     res.json({
         totalCases:    caseStats.totalCases,
         byType:        caseStats.byType,
@@ -304,6 +271,167 @@ app.post("/api/run-command", async function (req, res) {
         commandCount:  19,
         updatedAt:     Date.now(),
     });
+});
+
+// The website sends the user's Discord OAuth token here in a header.
+// We verify it directly against Discord's API (never trust the browser's
+// word for who's logged in), then only return guilds where:
+//   1. Unknown is actually a member of that guild
+//   2. The logged-in user has Manage Server permission in that guild
+app.get("/api/my-guilds", async function (req, res) {
+    var authHeader = req.headers["authorization"];
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+        return res.status(401).json({ error: "Missing Discord token" });
+    }
+    var userToken = authHeader.slice(7);
+
+    var discordRes;
+    try {
+        discordRes = await fetch("https://discord.com/api/users/@me/guilds", {
+            headers: { Authorization: "Bearer " + userToken },
+        });
+    } catch (err) {
+        return res.status(502).json({ error: "Could not reach Discord" });
+    }
+
+    if (!discordRes.ok) {
+        return res.status(401).json({ error: "Invalid or expired Discord token" });
+    }
+
+    var userGuilds = await discordRes.json();
+
+    // MANAGE_GUILD permission bit is 0x20
+    var manageable = userGuilds.filter(function (g) {
+        return (parseInt(g.permissions, 10) & 0x20) === 0x20;
+    });
+
+    var results = [];
+    for (var i = 0; i < manageable.length; i++) {
+        var g = manageable[i];
+        var botGuild = client.guilds.cache.get(g.id);
+        if (!botGuild) continue; // Unknown isn't in this server, skip it
+
+        var stats    = db.getStatsForGuild(g.id);
+        var settings = db.getGuildSettings(g.id);
+
+        results.push({
+            id:           g.id,
+            name:         botGuild.name,
+            memberCount:  botGuild.memberCount,
+            icon:         botGuild.icon
+                ? "https://cdn.discordapp.com/icons/" + g.id + "/" + botGuild.icon + ".png"
+                : null,
+            totalCases:   stats.totalCases,
+            byType:       stats.byType,
+            activeMutes:  stats.activeMutes,
+            recentCases:  stats.recentCases,
+            settings: {
+                modRoleId:            settings.modRoleId || null,
+                summaryLogChannelId:  settings.summaryLogChannelId || null,
+                detailedLogChannelId: settings.detailedLogChannelId || null,
+            },
+        });
+    }
+
+    res.json({ guilds: results });
+});
+
+// Lets the dashboard update a guild's settings (mod role, log channels).
+// Same token verification as above, plus we re-check Manage Server
+// permission for this exact guild before writing anything.
+app.post("/api/guild-settings", async function (req, res) {
+    var authHeader = req.headers["authorization"];
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+        return res.status(401).json({ error: "Missing Discord token" });
+    }
+    var userToken = authHeader.slice(7);
+    var guildId    = req.body.guildId;
+    var updates    = req.body.settings || {};
+
+    if (!guildId) return res.status(400).json({ error: "Missing guildId" });
+
+    var discordRes;
+    try {
+        discordRes = await fetch("https://discord.com/api/users/@me/guilds", {
+            headers: { Authorization: "Bearer " + userToken },
+        });
+    } catch (err) {
+        return res.status(502).json({ error: "Could not reach Discord" });
+    }
+
+    if (!discordRes.ok) {
+        return res.status(401).json({ error: "Invalid or expired Discord token" });
+    }
+
+    var userGuilds = await discordRes.json();
+    var target = userGuilds.find(function (g) { return g.id === guildId; });
+
+    if (!target || (parseInt(target.permissions, 10) & 0x20) !== 0x20) {
+        return res.status(403).json({ error: "You do not have permission to manage this server" });
+    }
+
+    if (!client.guilds.cache.has(guildId)) {
+        return res.status(404).json({ error: "Unknown is not in that server" });
+    }
+
+    var safeUpdates = {};
+    if (updates.modRoleId !== undefined)            safeUpdates.modRoleId = updates.modRoleId;
+    if (updates.summaryLogChannelId !== undefined)  safeUpdates.summaryLogChannelId = updates.summaryLogChannelId;
+    if (updates.detailedLogChannelId !== undefined) safeUpdates.detailedLogChannelId = updates.detailedLogChannelId;
+
+    db.setGuildSettings(guildId, safeUpdates);
+    res.json({ ok: true });
+});
+
+// Lets the dashboard console run a Cmdr command. Verifies the token and
+// Manage Server permission for the guild first, same as the settings route.
+// Runs on whichever live server has the most players, since the dashboard
+// doesn't have a per-server picker like the Discord /ingame command does.
+app.post("/api/run-command", async function (req, res) {
+    var authHeader = req.headers["authorization"];
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+        return res.status(401).json({ error: "Missing Discord token" });
+    }
+    var userToken = authHeader.slice(7);
+    var command   = (req.body.command || "").trim();
+    var guildId   = req.body.guildId;
+
+    if (!command) return res.status(400).json({ error: "No command provided" });
+    if (!guildId) return res.status(400).json({ error: "Missing guildId" });
+
+    var discordRes;
+    try {
+        discordRes = await fetch("https://discord.com/api/users/@me/guilds", {
+            headers: { Authorization: "Bearer " + userToken },
+        });
+    } catch (err) {
+        return res.status(502).json({ error: "Could not reach Discord" });
+    }
+
+    if (!discordRes.ok) {
+        return res.status(401).json({ error: "Invalid or expired Discord token" });
+    }
+
+    var userGuilds = await discordRes.json();
+    var target = userGuilds.find(function (g) { return g.id === guildId; });
+
+    if (!target || (parseInt(target.permissions, 10) & 0x20) !== 0x20) {
+        return res.status(403).json({ error: "You do not have permission to manage this server" });
+    }
+
+    var live = servers.getLiveServers();
+    if (!live.length) {
+        return res.status(404).json({ error: "No live Roblox servers are currently online" });
+    }
+
+    var targetJobId = live[0].jobId; // most populated server first, per servers.js sort
+
+    var result = await ingame.enqueue(command, targetJobId, null, null);
+    if (result.success) {
+        res.json({ ok: true, result: result.result });
+    } else {
+        res.status(504).json({ error: result.result });
+    }
 });
 
 app.get("/", function (req, res) {
