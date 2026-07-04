@@ -200,22 +200,21 @@ client.on("guildMemberRemove", async function (member) {
 // ── Express server ─────────────────────────────────────────────────────────────
 
 var app = express();
-app.use(express.json());
 
-// public stats endpoint needs CORS so the website (different domain) can fetch it
-app.use("/stats", function (req, res, next) {
+// CORS has to run before body parsing and before any route matching, or the
+// browser's preflight OPTIONS request never gets a valid response and every
+// fetch() from the dashboard fails before your actual endpoint code runs.
+// This applies to every route, not just /api and /stats, so nothing gets
+// missed if a new endpoint gets added later.
+app.use(function (req, res, next) {
     res.header("Access-Control-Allow-Origin", "*");
-    res.header("Access-Control-Allow-Methods", "GET");
-    next();
-});
-
-app.use("/api", function (req, res, next) {
-    res.header("Access-Control-Allow-Origin", "*");
-    res.header("Access-Control-Allow-Methods", "GET, POST");
-    res.header("Access-Control-Allow-Headers", "Authorization, Content-Type");
+    res.header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    res.header("Access-Control-Allow-Headers", "Authorization, Content-Type, x-roblox-secret");
     if (req.method === "OPTIONS") return res.sendStatus(204);
     next();
 });
+
+app.use(express.json());
 
 app.use("/roblox", function (req, res, next) {
     if (ROBLOX_SECRET && req.headers["x-roblox-secret"] !== ROBLOX_SECRET) {
