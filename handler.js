@@ -4,8 +4,18 @@ const utils = require("./utils");
 const fs    = require("fs");
 const path  = require("path");
 
-const WARN_KICK_THRESHOLD = 3;
-const WARN_BAN_THRESHOLD  = 5;
+const DEFAULT_WARN_KICK_THRESHOLD = 3;
+const DEFAULT_WARN_BAN_THRESHOLD  = 5;
+
+// Reads the per-guild threshold if the server configured one (via the
+// dashboard or /setup), otherwise falls back to the default.
+function getWarnThresholds(guildId) {
+    const settings = db.getGuildSettings(guildId);
+    return {
+        kick: settings.warnKickThreshold || DEFAULT_WARN_KICK_THRESHOLD,
+        ban:  settings.warnBanThreshold  || DEFAULT_WARN_BAN_THRESHOLD,
+    };
+}
 const MAX_TIMEOUT_MS      = 28 * 24 * 60 * 60 * 1000;
 
 function isHigherOrEqual(mod, target) {
@@ -14,6 +24,9 @@ function isHigherOrEqual(mod, target) {
 }
 
 async function dmUser(user, guild, type, reason, duration) {
+    const settings = db.getGuildSettings(guild.id);
+    if (settings.dmOnAction === false) return;
+
     try {
         const embed = new EmbedBuilder()
             .setColor(utils.actionColor(type))
@@ -25,10 +38,11 @@ async function dmUser(user, guild, type, reason, duration) {
 }
 
 async function handleWarnEscalation(interaction, targetMember, warnCount) {
-    const guild  = interaction.guild;
-    const reason = `Automatic escalation — reached ${warnCount} warning(s)`;
+    const guild      = interaction.guild;
+    const thresholds = getWarnThresholds(guild.id);
+    const reason      = `Automatic escalation — reached ${warnCount} warning(s)`;
 
-    if (warnCount >= WARN_BAN_THRESHOLD) {
+    if (warnCount >= thresholds.ban) {
         await dmUser(targetMember.user, guild, "ban", reason);
         await targetMember.ban({ reason, deleteMessageSeconds: 0 });
         const caseId   = db.addCase(guild.id, {
@@ -40,7 +54,7 @@ async function handleWarnEscalation(interaction, targetMember, warnCount) {
         return "ban";
     }
 
-    if (warnCount >= WARN_KICK_THRESHOLD) {
+    if (warnCount >= thresholds.kick) {
         await dmUser(targetMember.user, guild, "kick", reason);
         await targetMember.kick(reason);
         const caseId   = db.addCase(guild.id, {
@@ -324,9 +338,10 @@ handlers.warn = async (interaction) => {
 
     let escalationNote = "";
     if (targetMember) {
-        const escalated = await handleWarnEscalation(interaction, targetMember, warnCount);
-        if (escalated === "ban")  escalationNote = `\nUser automatically **banned** after reaching ${WARN_BAN_THRESHOLD} warnings.`;
-        if (escalated === "kick") escalationNote = `\nUser automatically **kicked** after reaching ${WARN_KICK_THRESHOLD} warnings.`;
+        const thresholds = getWarnThresholds(guild.id);
+        const escalated   = await handleWarnEscalation(interaction, targetMember, warnCount);
+        if (escalated === "ban")  escalationNote = `\nUser automatically **banned** after reaching ${thresholds.ban} warnings.`;
+        if (escalated === "kick") escalationNote = `\nUser automatically **kicked** after reaching ${thresholds.kick} warnings.`;
     }
 
     return interaction.editReply({
@@ -619,42 +634,59 @@ handlers.setup = async (interaction) => {
         return utils.errorReply(interaction, "Only administrators can configure the bot.");
     }
 
-    const sub   = interaction.options.getSubcommand();
     const guild = interaction.guild;
 
-    if (sub === "modrole") {
-        const role = interaction.options.getRole("role");
-        db.setGuildSettings(guild.id, { modRoleId: role.id });
-        return utils.successReply(interaction, `Mod role set to <@&${role.id}>.`);
+    const modRole      = interaction.options.getRole("modrole");
+    const summaryLog    = interaction.options.getChannel("summarylog");
+    const detailedLog   = interaction.options.getChannel("detailedlog");
+    const warnKickAt    = interaction.options.getInteger("warnkickat");
+    const warnBanAt     = interaction.options.getInteger("warnbanat");
+    const dmOnAction     = interaction.options.getBoolean("dmonaction");
+    const logLeaves      = interaction.options.getBoolean("logleaves");
+    const prefix         = interaction.options.getString("prefix");
+    const aiModeration    = interaction.options.getBoolean("aimoderation");
+    const aiModChannel  = interaction.options.getChannel("aimodchannel");
+
+    const anyOptionProvided =
+        modRole || summaryLog || detailedLog || warnKickAt !== null || warnBanAt !== null ||
+        dmOnAction !== null || logLeaves !== null || prefix !== null || aiModeration !== null || aiModChannel;
+
+    if (anyOptionProvided) {
+        const updates = {};
+        if (modRole)               updates.modRoleId = modRole.id;
+        if (summaryLog)            updates.summaryLogChannelId = summaryLog.id;
+        if (detailedLog)           updates.detailedLogChannelId = detailedLog.id;
+        if (warnKickAt !== null)   updates.warnKickThreshold = warnKickAt;
+        if (warnBanAt !== null)    updates.warnBanThreshold = warnBanAt;
+        if (dmOnAction !== null)   updates.dmOnAction = dmOnAction;
+        if (logLeaves !== null)    updates.logMemberLeaves = logLeaves;
+        if (prefix !== null)       updates.commandPrefix = prefix.trim() === "" ? null : prefix.trim().slice(0, 5);
+        if (aiModeration !== null) updates.aiModerationEnabled = aiModeration;
+        if (aiModChannel)          updates.aiModerationChannelId = aiModChannel.id;
+
+        db.setGuildSettings(guild.id, updates);
     }
 
-    if (sub === "summarylog") {
-        const channel = interaction.options.getChannel("channel");
-        db.setGuildSettings(guild.id, { summaryLogChannelId: channel.id });
-        return utils.successReply(interaction, `Summary log channel set to <#${channel.id}>.`);
-    }
+    const settings   = db.getGuildSettings(guild.id);
+    const thresholds = getWarnThresholds(guild.id);
 
-    if (sub === "detailedlog") {
-        const channel = interaction.options.getChannel("channel");
-        db.setGuildSettings(guild.id, { detailedLogChannelId: channel.id });
-        return utils.successReply(interaction, `Detailed log channel set to <#${channel.id}>.`);
-    }
+    const embed = new EmbedBuilder()
+        .setColor(utils.COLORS.info)
+        .setTitle(anyOptionProvided ? "Settings updated" : "Current Configuration")
+        .addFields(
+            { name: "Mod Role",       value: settings.modRoleId           ? `<@&${settings.modRoleId}>`            : "Not set", inline: true },
+            { name: "Summary Log",    value: settings.summaryLogChannelId  ? `<#${settings.summaryLogChannelId}>`  : "Not set", inline: true },
+            { name: "Detailed Log",   value: settings.detailedLogChannelId ? `<#${settings.detailedLogChannelId}>` : "Not set", inline: true },
+            { name: "Auto-Kick at",   value: `${thresholds.kick} warnings`, inline: true },
+            { name: "Auto-Ban at",    value: `${thresholds.ban} warnings`,  inline: true },
+            { name: "DM on Action",   value: settings.dmOnAction === false ? "Off" : "On", inline: true },
+            { name: "Log Leaves",     value: settings.logMemberLeaves === false ? "Off" : "On", inline: true },
+            { name: "Text Prefix",    value: settings.commandPrefix || "Not set", inline: true },
+            { name: "AI Moderation",  value: settings.aiModerationEnabled ? "Enabled (beta)" : "Off", inline: true },
+        )
+        .setTimestamp();
 
-    if (sub === "view") {
-        const settings = db.getGuildSettings(guild.id);
-        const embed = new EmbedBuilder()
-            .setColor(utils.COLORS.info)
-            .setTitle("Bot Configuration")
-            .addFields(
-                { name: "Mod Role",     value: settings.modRoleId           ? `<@&${settings.modRoleId}>`            : "Not set", inline: true },
-                { name: "Summary Log",  value: settings.summaryLogChannelId  ? `<#${settings.summaryLogChannelId}>`  : "Not set", inline: true },
-                { name: "Detailed Log", value: settings.detailedLogChannelId ? `<#${settings.detailedLogChannelId}>` : "Not set", inline: true },
-                { name: "Auto-Kick at", value: `${WARN_KICK_THRESHOLD} warnings`, inline: true },
-                { name: "Auto-Ban at",  value: `${WARN_BAN_THRESHOLD} warnings`,  inline: true },
-            )
-            .setTimestamp();
-        return interaction.reply({ embeds: [embed], ephemeral: true });
-    }
+    return interaction.reply({ embeds: [embed], ephemeral: true });
 };
 
 // ── Ingame ────────────────────────────────────────────────────────────────────
