@@ -153,28 +153,19 @@ module.exports = [
         .setDescription("View detailed information about a user")
         .addUserOption(o => o.setName("user").setDescription("User to look up (defaults to yourself)").setRequired(false)),
 
-    // ── Setup ─────────────────────────────────────────────────────────────────
+    // ── Setup (single command, all optional fields) ────────────────────────────
     new SlashCommandBuilder()
         .setName("setup")
-        .setDescription("Configure the moderation bot for this server")
-        .addSubcommand(sub =>
-            sub.setName("modrole")
-                .setDescription("Set the moderator role")
-                .addRoleOption(o => o.setName("role").setDescription("Mod role").setRequired(true))
-        )
-        .addSubcommand(sub =>
-            sub.setName("summarylog")
-                .setDescription("Set the summary mod-log channel")
-                .addChannelOption(o => o.setName("channel").setDescription("Summary log channel").setRequired(true))
-        )
-        .addSubcommand(sub =>
-            sub.setName("detailedlog")
-                .setDescription("Set the detailed mod-log channel")
-                .addChannelOption(o => o.setName("channel").setDescription("Detailed log channel").setRequired(true))
-        )
-        .addSubcommand(sub =>
-            sub.setName("view")
-                .setDescription("View current bot configuration")
-        ),
+        .setDescription("Configure Unknown for this server. Run with no options to view current config.")
+        .addRoleOption(o => o.setName("modrole").setDescription("Role that can use moderation commands").setRequired(false))
+        .addChannelOption(o => o.setName("summarylog").setDescription("Channel for short one-line case summaries").setRequired(false))
+        .addChannelOption(o => o.setName("detailedlog").setDescription("Channel for full case cards").setRequired(false))
+        .addIntegerOption(o => o.setName("warnkickat").setDescription("Auto-kick after this many warnings (1-20)").setMinValue(1).setMaxValue(20).setRequired(false))
+        .addIntegerOption(o => o.setName("warnbanat").setDescription("Auto-ban after this many warnings (1-20)").setMinValue(1).setMaxValue(20).setRequired(false))
+        .addBooleanOption(o => o.setName("dmonaction").setDescription("DM users when they're banned, kicked, muted, or warned").setRequired(false))
+        .addBooleanOption(o => o.setName("logleaves").setDescription("Log to the summary channel when a member leaves").setRequired(false))
+        .addStringOption(o => o.setName("prefix").setDescription("Prefix for text commands, e.g. ! or . (leave blank to disable)").setRequired(false))
+        .addBooleanOption(o => o.setName("aimoderation").setDescription("(Beta) Flag suspicious messages to the detailed log channel for review").setRequired(false))
+        .addChannelOption(o => o.setName("aimodchannel").setDescription("(Beta) Channel for AI moderation flags, defaults to detailed log").setRequired(false)),
 
 ].map(c => c.toJSON());
