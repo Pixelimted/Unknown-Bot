@@ -32,10 +32,7 @@ if (!TOKEN || !CLIENT_ID) {
 
 const client = new Client({
     intents: [
-        GatewayIntentBits.Guilds,
-        GatewayIntentBits.GuildModeration,
-        GatewayIntentBits.GuildMessages,
-        GatewayIntentBits.MessageContent,
+        GatewayIntentBits.Guilds, // Only the base intent required for slash commands and basic guild info
     ],
 });
 
@@ -87,27 +84,6 @@ client.once("clientReady", function (c) {
 });
 
 // ── Interactions ───────────────────────────────────────────────────────────────
-
-const prefixCommands = require("./prefix");
-const aiMod           = require("./aimod");
-
-// Prefix commands (e.g. "!ban @user reason") and AI Moderation flagging
-// both need to see message content, which is why the intents above include
-// GuildMessages and MessageContent.
-client.on("messageCreate", async function (message) {
-    try {
-        var handledAsPrefix = await prefixCommands.maybeHandlePrefixMessage(message, handlers);
-        if (handledAsPrefix) return;
-    } catch (err) {
-        console.error("[Prefix] Error handling message:", err);
-    }
-
-    try {
-        await aiMod.handleMessage(message);
-    } catch (err) {
-        console.error("[AI Moderation] Error scanning message:", err);
-    }
-});
 
 client.on("interactionCreate", async function (interaction) {
 
@@ -225,11 +201,6 @@ client.on("guildMemberRemove", async function (member) {
 
 var app = express();
 
-// CORS has to run before body parsing and before any route matching, or the
-// browser's preflight OPTIONS request never gets a valid response and every
-// fetch() from the dashboard fails before your actual endpoint code runs.
-// This applies to every route, not just /api and /stats, so nothing gets
-// missed if a new endpoint gets added later.
 app.use(function (req, res, next) {
     res.header("Access-Control-Allow-Origin", "*");
     res.header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
@@ -296,11 +267,6 @@ app.get("/stats", function (req, res) {
     });
 });
 
-// The website sends the user's Discord OAuth token here in a header.
-// We verify it directly against Discord's API (never trust the browser's
-// word for who's logged in), then only return guilds where:
-//   1. Unknown is actually a member of that guild
-//   2. The logged-in user has Manage Server permission in that guild
 app.get("/api/my-guilds", async function (req, res) {
     var authHeader = req.headers["authorization"];
     if (!authHeader || !authHeader.startsWith("Bearer ")) {
@@ -366,9 +332,6 @@ app.get("/api/my-guilds", async function (req, res) {
     res.json({ guilds: results });
 });
 
-// Lets the dashboard update a guild's settings (mod role, log channels).
-// Same token verification as above, plus we re-check Manage Server
-// permission for this exact guild before writing anything.
 app.post("/api/guild-settings", async function (req, res) {
     var authHeader = req.headers["authorization"];
     if (!authHeader || !authHeader.startsWith("Bearer ")) {
@@ -409,8 +372,6 @@ app.post("/api/guild-settings", async function (req, res) {
     if (updates.summaryLogChannelId !== undefined)  safeUpdates.summaryLogChannelId = updates.summaryLogChannelId;
     if (updates.detailedLogChannelId !== undefined) safeUpdates.detailedLogChannelId = updates.detailedLogChannelId;
 
-    // Auto-escalation thresholds. Clamped to sane bounds so the dashboard
-    // can't be used to set something like 0 warnings = instant ban.
     if (updates.warnKickThreshold !== undefined) {
         var kickVal = parseInt(updates.warnKickThreshold, 10);
         if (kickVal >= 1 && kickVal <= 20) safeUpdates.warnKickThreshold = kickVal;
@@ -420,10 +381,7 @@ app.post("/api/guild-settings", async function (req, res) {
         if (banVal >= 1 && banVal <= 20) safeUpdates.warnBanThreshold = banVal;
     }
 
-    // Whether leave-events get logged to the summary channel
     if (updates.logMemberLeaves !== undefined) safeUpdates.logMemberLeaves = !!updates.logMemberLeaves;
-
-    // Whether users get DMed when a moderation action is taken against them
     if (updates.dmOnAction !== undefined) safeUpdates.dmOnAction = !!updates.dmOnAction;
 
     if (updates.commandPrefix !== undefined) {
@@ -437,10 +395,6 @@ app.post("/api/guild-settings", async function (req, res) {
     res.json({ ok: true });
 });
 
-// Lets the dashboard console run a Cmdr command. Verifies the token and
-// Manage Server permission for the guild first, same as the settings route.
-// Runs on whichever live server has the most players, since the dashboard
-// doesn't have a per-server picker like the Discord /ingame command does.
 app.post("/api/run-command", async function (req, res) {
     var authHeader = req.headers["authorization"];
     if (!authHeader || !authHeader.startsWith("Bearer ")) {
@@ -478,7 +432,7 @@ app.post("/api/run-command", async function (req, res) {
         return res.status(404).json({ error: "No live Roblox servers are currently online" });
     }
 
-    var targetJobId = live[0].jobId; // most populated server first, per servers.js sort
+    var targetJobId = live[0].jobId;
 
     var result = await ingame.enqueue(command, targetJobId, null, null);
     if (result.success) {
