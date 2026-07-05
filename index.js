@@ -34,6 +34,8 @@ const client = new Client({
     intents: [
         GatewayIntentBits.Guilds,
         GatewayIntentBits.GuildModeration,
+        GatewayIntentBits.GuildMessages,
+        GatewayIntentBits.MessageContent,
     ],
 });
 
@@ -85,6 +87,27 @@ client.once("clientReady", function (c) {
 });
 
 // ── Interactions ───────────────────────────────────────────────────────────────
+
+const prefixCommands = require("./prefix");
+const aiMod           = require("./aimod");
+
+// Prefix commands (e.g. "!ban @user reason") and AI Moderation flagging
+// both need to see message content, which is why the intents above include
+// GuildMessages and MessageContent.
+client.on("messageCreate", async function (message) {
+    try {
+        var handledAsPrefix = await prefixCommands.maybeHandlePrefixMessage(message, handlers);
+        if (handledAsPrefix) return;
+    } catch (err) {
+        console.error("[Prefix] Error handling message:", err);
+    }
+
+    try {
+        await aiMod.handleMessage(message);
+    } catch (err) {
+        console.error("[AI Moderation] Error scanning message:", err);
+    }
+});
 
 client.on("interactionCreate", async function (interaction) {
 
@@ -170,6 +193,7 @@ client.on("interactionCreate", async function (interaction) {
 
 client.on("guildMemberRemove", async function (member) {
     var settings  = db.getGuildSettings(member.guild.id);
+    if (settings.logMemberLeaves === false) return;
     var channelId = settings.summaryLogChannelId;
     if (!channelId) return;
 
@@ -325,9 +349,16 @@ app.get("/api/my-guilds", async function (req, res) {
             activeMutes:  stats.activeMutes,
             recentCases:  stats.recentCases,
             settings: {
-                modRoleId:            settings.modRoleId || null,
-                summaryLogChannelId:  settings.summaryLogChannelId || null,
-                detailedLogChannelId: settings.detailedLogChannelId || null,
+                modRoleId:             settings.modRoleId || null,
+                summaryLogChannelId:   settings.summaryLogChannelId || null,
+                detailedLogChannelId:  settings.detailedLogChannelId || null,
+                warnKickThreshold:     settings.warnKickThreshold || 3,
+                warnBanThreshold:      settings.warnBanThreshold || 5,
+                logMemberLeaves:       settings.logMemberLeaves !== false,
+                dmOnAction:            settings.dmOnAction !== false,
+                commandPrefix:         settings.commandPrefix || "",
+                aiModerationEnabled:   !!settings.aiModerationEnabled,
+                aiModerationChannelId: settings.aiModerationChannelId || null,
             },
         });
     }
@@ -377,6 +408,30 @@ app.post("/api/guild-settings", async function (req, res) {
     if (updates.modRoleId !== undefined)            safeUpdates.modRoleId = updates.modRoleId;
     if (updates.summaryLogChannelId !== undefined)  safeUpdates.summaryLogChannelId = updates.summaryLogChannelId;
     if (updates.detailedLogChannelId !== undefined) safeUpdates.detailedLogChannelId = updates.detailedLogChannelId;
+
+    // Auto-escalation thresholds. Clamped to sane bounds so the dashboard
+    // can't be used to set something like 0 warnings = instant ban.
+    if (updates.warnKickThreshold !== undefined) {
+        var kickVal = parseInt(updates.warnKickThreshold, 10);
+        if (kickVal >= 1 && kickVal <= 20) safeUpdates.warnKickThreshold = kickVal;
+    }
+    if (updates.warnBanThreshold !== undefined) {
+        var banVal = parseInt(updates.warnBanThreshold, 10);
+        if (banVal >= 1 && banVal <= 20) safeUpdates.warnBanThreshold = banVal;
+    }
+
+    // Whether leave-events get logged to the summary channel
+    if (updates.logMemberLeaves !== undefined) safeUpdates.logMemberLeaves = !!updates.logMemberLeaves;
+
+    // Whether users get DMed when a moderation action is taken against them
+    if (updates.dmOnAction !== undefined) safeUpdates.dmOnAction = !!updates.dmOnAction;
+
+    if (updates.commandPrefix !== undefined) {
+        var trimmedPrefix = (updates.commandPrefix || "").trim().slice(0, 5);
+        safeUpdates.commandPrefix = trimmedPrefix === "" ? null : trimmedPrefix;
+    }
+    if (updates.aiModerationEnabled !== undefined)   safeUpdates.aiModerationEnabled = !!updates.aiModerationEnabled;
+    if (updates.aiModerationChannelId !== undefined) safeUpdates.aiModerationChannelId = updates.aiModerationChannelId;
 
     db.setGuildSettings(guildId, safeUpdates);
     res.json({ ok: true });
